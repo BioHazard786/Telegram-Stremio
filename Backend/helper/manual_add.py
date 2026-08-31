@@ -58,11 +58,30 @@ async def resolve_telegram_message(client, url: str = None, chat_id=None, msg_id
     #----- Prefer the caption over the raw file name, then normalise it to the exact
     #----- filename receiver.py stores (clean, split-suffix stripped, video extension).
     caption = (getattr(message, "caption", None) or "").strip()
-    raw_name = caption or getattr(media, "file_name", None) or "video"
-    cleaned = clean_filename(raw_name)
-    split_info = parse_split_info(cleaned)
+    file_name_attr = (getattr(media, "file_name", None) or "").strip()
+
+    parsed = None
+    split_info = None
+    raw_name = ""
+    for candidate in (caption, file_name_attr):
+        if not candidate:
+            continue
+        cleaned = clean_filename(candidate)
+        cand_split = parse_split_info(cleaned)
+        cand_parsed = parse_media_name(strip_part_suffix(cleaned) if cand_split else cleaned)
+        if cand_parsed and (cand_parsed.get("title") or cand_parsed.get("quality")):
+            raw_name = candidate
+            split_info = cand_split
+            parsed = cand_parsed
+            break
+
+    if not parsed:
+        raw_name = caption or file_name_attr or "video"
+        cleaned = clean_filename(raw_name)
+        split_info = parse_split_info(cleaned)
+        parsed = parse_media_name(strip_part_suffix(cleaned) if split_info else cleaned)
+
     raw_size = getattr(media, "file_size", 0) or 0
-    parsed = parse_media_name(strip_part_suffix(cleaned) if split_info else cleaned)
     file_name = finalize_media_name(raw_name, bool(split_info))
 
     #----- Real video dimensions beat the filename; documents fall back to the name

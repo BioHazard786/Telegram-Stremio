@@ -11,3 +11,5 @@ log.txt
 test.py
 config.env
 *.pyc
+.episode_maps_cache/
+

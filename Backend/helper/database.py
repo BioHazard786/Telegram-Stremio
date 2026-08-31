@@ -18,13 +18,13 @@ from Backend.helper.task_manager import delete_message
 from Backend.logger import LOGGER
 
 
-
 def convert_objectid_to_str(document: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in document.items():
         if isinstance(value, ObjectId):
             document[key] = str(value)
         elif isinstance(value, list):
-            document[key] = [convert_objectid_to_str(item) if isinstance(item, dict) else item for item in value]
+            document[key] = [convert_objectid_to_str(item) if isinstance(
+                item, dict) else item for item in value]
         elif isinstance(value, dict):
             document[key] = convert_objectid_to_str(value)
     return document
@@ -36,7 +36,8 @@ class Database:
         self.db_name = db_name
 
         if len(self.db_uris) < 2:
-            raise ValueError("At least 2 database URIs are required (1 for tracking + 1 for storage).")
+            raise ValueError(
+                "At least 2 database URIs are required (1 for tracking + 1 for storage).")
 
         self.clients: Dict[str, motor.motor_asyncio.AsyncIOMotorClient] = {}
         self.dbs: Dict[str, motor.motor_asyncio.AsyncIOMotorDatabase] = {}
@@ -54,8 +55,9 @@ class Database:
 
                 masked_uri = re.sub(r"://(.*?):.*?@", r"://\1:*****@", uri)
                 masked_uri = masked_uri.split('?')[0]
-                
-                LOGGER.info(f"{db_type} Database connected successfully: {masked_uri}")
+
+                LOGGER.info(
+                    f"{db_type} Database connected successfully: {masked_uri}")
 
             state = await self.dbs["tracking"]["state"].find_one({"_id": "db_index"})
             if not state:
@@ -71,8 +73,8 @@ class Database:
         except Exception as e:
             LOGGER.error(f"Database connection error: {e}")
 
-    #----- Create the indexes catalog/stream lookups rely on.
-    #----- create_index is idempotent, so this is safe to call repeatedly.
+    # ----- Create the indexes catalog/stream lookups rely on.
+    # ----- create_index is idempotent, so this is safe to call repeatedly.
     async def ensure_indexes(self) -> None:
         tracking = self.dbs.get("tracking")
         if tracking is not None:
@@ -108,8 +110,8 @@ class Database:
         await subs.create_index([("chat_id", ASCENDING), ("msg_id", ASCENDING)], unique=True)
         await subs.create_index([("imdb_id", ASCENDING), ("season", ASCENDING), ("episode", ASCENDING)])
 
-    #----- Ensure per-storage-DB indexes on the movie/tv collections.
-    #----- tmdb_id + imdb_id drive catalog hydration and stream lookups.
+    # ----- Ensure per-storage-DB indexes on the movie/tv collections.
+    # ----- tmdb_id + imdb_id drive catalog hydration and stream lookups.
     async def _ensure_storage_indexes(self, db_key: str) -> None:
         db = self.dbs.get(db_key)
         if db is None:
@@ -120,7 +122,8 @@ class Database:
                 await db[collection_name].create_index([("imdb_id", ASCENDING)])
                 await db[collection_name].create_index([("kitsu_id", ASCENDING)])
             except Exception as e:
-                LOGGER.error(f"Failed creating index on {db_key}/{collection_name}: {e}")
+                LOGGER.error(
+                    f"Failed creating index on {db_key}/{collection_name}: {e}")
 
     async def disconnect(self):
         for client in self.clients.values():
@@ -133,7 +136,6 @@ class Database:
             {"$set": {"current_index": self.current_db_index}},
             upsert=True
         )
-
 
     async def get_settings(self) -> dict:
         try:
@@ -168,8 +170,6 @@ class Database:
         )
         return True
 
-
-
     async def connect_storage_db(self, uri: str, index: int) -> bool:
         try:
             client = motor.motor_asyncio.AsyncIOMotorClient(uri)
@@ -180,8 +180,10 @@ class Database:
             self.dbs[db_key] = client[self.db_name]
 
             db_type = "Tracking" if index == 0 else f"Storage {index}"
-            masked_uri = re.sub(r"://(.*?):.*?@", r"://\1:*****@", uri).split('?')[0]
-            LOGGER.info(f"{db_type} Database connected successfully: {masked_uri}")
+            masked_uri = re.sub(
+                r"://(.*?):.*?@", r"://\1:*****@", uri).split('?')[0]
+            LOGGER.info(
+                f"{db_type} Database connected successfully: {masked_uri}")
             if index > 0:
                 await self._ensure_storage_indexes(db_key)
             return True
@@ -200,7 +202,8 @@ class Database:
     def get_database_list(self) -> List[Dict[str, Any]]:
         result = []
         for index, uri in enumerate(self.db_uris):
-            masked = re.sub(r"://(.*?):.*?@", r"://\1:*****@", uri).split('?')[0]
+            masked = re.sub(r"://(.*?):.*?@", r"://\1:*****@",
+                            uri).split('?')[0]
             db_key = "tracking" if index == 0 else f"storage_{index}"
             entry = {
                 "index": index,
@@ -216,7 +219,8 @@ class Database:
 
     async def reload_extra_databases(self, new_extra_uris: List[str]) -> Dict[str, Any]:
         old_extra = self.db_uris[2:]
-        new_extra = [u.strip() for u in (new_extra_uris or []) if u and u.strip()]
+        new_extra = [u.strip()
+                     for u in (new_extra_uris or []) if u and u.strip()]
 
         common_len = min(len(old_extra), len(new_extra))
         for i in range(common_len):
@@ -252,13 +256,13 @@ class Database:
         LOGGER.info(f"reload_extra_databases: {message}")
         return {"added": added, "removed": removed, "message": message}
 
-    #-----
-    #----- User Subscription Management
-    #-----
+    # -----
+    # ----- User Subscription Management
+    # -----
     async def get_user(self, user_id: int) -> Optional[dict]:
         return await self.dbs["tracking"]["users"].find_one({"_id": user_id})
 
-    #----- Whether a user doc represents a currently-active subscription
+    # ----- Whether a user doc represents a currently-active subscription
     @staticmethod
     def is_subscription_active(user: Optional[dict], now: datetime = None) -> bool:
         if not user or user.get("subscription_status") != "active":
@@ -274,7 +278,7 @@ class Database:
             pass
         return expiry > reference
 
-    #----- (movie_count, tv_count) totals summed across per-DB stats
+    # ----- (movie_count, tv_count) totals summed across per-DB stats
     @staticmethod
     def content_totals(db_stats: List[dict]) -> Tuple[int, int]:
         total_movies = sum(stat.get("movie_count", 0) for stat in db_stats)
@@ -284,7 +288,8 @@ class Database:
     async def update_user_interaction(self, user_id: int, first_name: str, username: str):
         await self.dbs["tracking"]["users"].update_one(
             {"_id": user_id},
-            {"$set": {"first_name": first_name, "username": username, "last_interaction": datetime.utcnow()}},
+            {"$set": {"first_name": first_name, "username": username,
+                      "last_interaction": datetime.utcnow()}},
             upsert=True
         )
 
@@ -312,8 +317,8 @@ class Database:
             return None
 
         duration = user["pending_payment"]["duration"]
-        
-        #----- Calculate new expiry
+
+        # ----- Calculate new expiry
         current_expiry = user.get("subscription_expiry")
         now = datetime.utcnow()
         if current_expiry and current_expiry > now:
@@ -359,18 +364,19 @@ class Database:
             "subscription_status": "active"
         })
         return await cursor.to_list(None)
-        
+
     async def mark_reminder_sent(self, user_id: int):
-         await self.dbs["tracking"]["users"].update_one(
+        await self.dbs["tracking"]["users"].update_one(
             {"_id": user_id},
             {"$set": {"reminder_sent": True}}
         )
 
-    #-----
-    #----- Admin Subscription Management
-    #-----
+    # -----
+    # ----- Admin Subscription Management
+    # -----
     async def get_subscription_plans(self) -> List[dict]:
-        cursor = self.dbs["tracking"]["sub_plans"].find().sort("days", ASCENDING)
+        cursor = self.dbs["tracking"]["sub_plans"].find().sort(
+            "days", ASCENDING)
         plans = await cursor.to_list(None)
         return [convert_objectid_to_str(plan) for plan in plans]
 
@@ -387,7 +393,8 @@ class Database:
         try:
             result = await self.dbs["tracking"]["sub_plans"].update_one(
                 {"_id": ObjectId(plan_id)},
-                {"$set": {"days": days, "price": price, "currency": (currency or "INR").upper(), "updated_at": datetime.utcnow()}}
+                {"$set": {"days": days, "price": price, "currency": (
+                    currency or "INR").upper(), "updated_at": datetime.utcnow()}}
             )
             return result.modified_count > 0
         except Exception:
@@ -415,7 +422,8 @@ class Database:
             current_expiry = user.get("subscription_expiry") if user else None
 
             if action == "extend":
-                base = current_expiry if (current_expiry and current_expiry > now) else now
+                base = current_expiry if (
+                    current_expiry and current_expiry > now) else now
                 new_expiry = base + timedelta(days=days)
             else:
                 if current_expiry:
@@ -459,13 +467,13 @@ class Database:
 
         return False
 
-    #----- Update a subscriber's display name (and the linked token's name)
+    # ----- Update a subscriber's display name (and the linked token's name)
     async def update_subscriber_name(self, user_id: int, name: str) -> None:
         await self.dbs["tracking"]["users"].update_one({"_id": user_id}, {"$set": {"first_name": name}})
         await self.dbs["tracking"]["api_tokens"].update_one({"user_id": user_id}, {"$set": {"name": name}})
 
     async def assign_subscription(self, user_id: int, days: int, name: str = None) -> dict:
-        #----- Upsert a subscription for any user_id, creating a record if it doesn't exist
+        # ----- Upsert a subscription for any user_id, creating a record if it doesn't exist
         now = datetime.utcnow()
 
         user = await self.get_user(user_id)
@@ -478,7 +486,8 @@ class Database:
         else:
             new_expiry = now + timedelta(days=days)
 
-        set_fields = {"subscription_expiry": new_expiry, "subscription_status": "active"}
+        set_fields = {"subscription_expiry": new_expiry,
+                      "subscription_status": "active"}
         insert_fields = {"_id": user_id, "username": None, "created_at": now}
         if name:
             set_fields["first_name"] = name
@@ -504,7 +513,7 @@ class Database:
             ),
         }
 
-    #----- Give a user's token never-expiring access (clears any expiry date)
+    # ----- Give a user's token never-expiring access (clears any expiry date)
     async def set_user_never_expires(self, user_id: int, name: str = None) -> dict:
         now = datetime.utcnow()
         user = await self.get_user(user_id)
@@ -516,7 +525,8 @@ class Database:
             insert_fields["first_name"] = f"User {user_id}"
         await self.dbs["tracking"]["users"].update_one(
             {"_id": user_id},
-            {"$set": set_fields, "$unset": {"subscription_expiry": ""}, "$setOnInsert": insert_fields},
+            {"$set": set_fields, "$unset": {"subscription_expiry": ""},
+                "$setOnInsert": insert_fields},
             upsert=True,
         )
         token_doc = await self.ensure_api_token_for_user(user_id, (user or {}).get("first_name"))
@@ -532,16 +542,17 @@ class Database:
             ),
         }
 
-    #-----
-    #----- Custom Catalog Management
-    #-----
-    #----- Backfill the visibility model on catalogs that predate it
+    # -----
+    # ----- Custom Catalog Management
+    # -----
+    # ----- Backfill the visibility model on catalogs that predate it
     @staticmethod
     def _normalize_catalog(catalog: Optional[dict]) -> Optional[dict]:
         if not catalog:
             return catalog
         if catalog.get("visibility") not in ("public", "tokens", "owner"):
-            catalog["visibility"] = "public" if catalog.get("visible", True) else "owner"
+            catalog["visibility"] = "public" if catalog.get(
+                "visible", True) else "owner"
         catalog.setdefault("allowed_tokens", [])
         catalog.setdefault("exclusive", False)
         catalog.setdefault("searchable", False)
@@ -570,7 +581,8 @@ class Database:
 
     async def get_custom_catalogs(self, visible_only: bool = False) -> List[dict]:
         query = {"visible": True} if visible_only else {}
-        cursor = self.dbs["tracking"]["custom_catalogs"].find(query).sort("updated_at", DESCENDING)
+        cursor = self.dbs["tracking"]["custom_catalogs"].find(
+            query).sort("updated_at", DESCENDING)
         catalogs = await cursor.to_list(None)
         return [self._normalize_catalog(convert_objectid_to_str(catalog)) for catalog in catalogs]
 
@@ -603,10 +615,11 @@ class Database:
             if clean_name:
                 update_data["name"] = clean_name
 
-        #----- Setting catalog visibility cascades to every title in the catalog
+        # ----- Setting catalog visibility cascades to every title in the catalog
         cascade = visibility in ("public", "tokens", "owner")
         tokens = list(allowed_tokens or [])
-        final_visibility = visibility if cascade else existing.get("visibility", "public")
+        final_visibility = visibility if cascade else existing.get(
+            "visibility", "public")
         if cascade:
             update_data["visibility"] = visibility
             update_data["visible"] = visibility != "owner"
@@ -614,14 +627,16 @@ class Database:
             update_data["items.$[].visibility"] = visibility
             update_data["items.$[].allowed_tokens"] = tokens
 
-        #----- Exclusive locks every title to this catalog only (never on auto catalogs,
-        #----- and only meaningful for restricted visibility)
+        # ----- Exclusive locks every title to this catalog only (never on auto catalogs,
+        # ----- and only meaningful for restricted visibility)
         is_auto = bool(existing.get("auto"))
         want_exclusive = None
         if exclusive is not None and not is_auto:
-            want_exclusive = bool(exclusive) and final_visibility in ("tokens", "owner")
+            want_exclusive = bool(
+                exclusive) and final_visibility in ("tokens", "owner")
             update_data["exclusive"] = want_exclusive
-            update_data["searchable"] = bool(searchable) if want_exclusive else False
+            update_data["searchable"] = bool(
+                searchable) if want_exclusive else False
 
         try:
             result = await self.dbs["tracking"]["custom_catalogs"].update_one(
@@ -634,12 +649,12 @@ class Database:
         catalog = await self.dbs["tracking"]["custom_catalogs"].find_one({"_id": ObjectId(catalog_id)})
         items = catalog.get("items", []) if catalog else []
 
-        #----- Stamp visibility onto the underlying media documents so the default
-        #----- Latest/Popular catalogs and search honour it too
+        # ----- Stamp visibility onto the underlying media documents so the default
+        # ----- Latest/Popular catalogs and search honour it too
         if cascade:
             await self._apply_visibility_to_docs(items, final_visibility, tokens)
 
-        #----- Apply/clear exclusivity on the documents and purge from every other catalog
+        # ----- Apply/clear exclusivity on the documents and purge from every other catalog
         if want_exclusive is True:
             await self._apply_exclusivity_to_docs(items, catalog_id, bool(searchable))
             await self.purge_items_from_other_catalogs(catalog_id, items)
@@ -648,14 +663,16 @@ class Database:
 
         return result.modified_count > 0
 
-    #----- Stamp visibility onto media documents referenced by the given catalog items
+    # ----- Stamp visibility onto media documents referenced by the given catalog items
     async def _apply_visibility_to_docs(self, items: List[dict], visibility: str, allowed_tokens: List[str]) -> None:
         groups: Dict[Tuple[int, str], List[int]] = {}
         for it in items or []:
             try:
                 db_index = int(it.get("db_index", 1))
-                collection = self._collection_for(it.get("media_type", "movie"))
-                groups.setdefault((db_index, collection), []).append(int(it.get("tmdb_id")))
+                collection = self._collection_for(
+                    it.get("media_type", "movie"))
+                groups.setdefault((db_index, collection), []
+                                  ).append(int(it.get("tmdb_id")))
             except (TypeError, ValueError):
                 continue
         for (db_index, collection), ids in groups.items():
@@ -663,64 +680,72 @@ class Database:
             if db_key not in self.dbs:
                 continue
             try:
-                #----- Metadata-only change: never touch updated_on (keeps Latest order)
+                # ----- Metadata-only change: never touch updated_on (keeps Latest order)
                 await self.dbs[db_key][collection].update_many(
                     {"tmdb_id": {"$in": ids}},
-                    {"$set": {"visibility": visibility, "allowed_tokens": allowed_tokens}},
+                    {"$set": {"visibility": visibility,
+                              "allowed_tokens": allowed_tokens}},
                 )
             except Exception as e:
-                LOGGER.error(f"_apply_visibility_to_docs failed for {db_key}.{collection}: {e}")
+                LOGGER.error(
+                    f"_apply_visibility_to_docs failed for {db_key}.{collection}: {e}")
 
-    #----- Group catalog items into {(db_index, collection): [tmdb_id, ...]}
+    # ----- Group catalog items into {(db_index, collection): [tmdb_id, ...]}
     def _group_items_by_storage(self, items: List[dict]) -> Dict[Tuple[int, str], List[int]]:
         groups: Dict[Tuple[int, str], List[int]] = {}
         for it in items or []:
             try:
                 db_index = int(it.get("db_index", 1))
-                collection = self._collection_for(it.get("media_type", "movie"))
-                groups.setdefault((db_index, collection), []).append(int(it.get("tmdb_id")))
+                collection = self._collection_for(
+                    it.get("media_type", "movie"))
+                groups.setdefault((db_index, collection), []
+                                  ).append(int(it.get("tmdb_id")))
             except (TypeError, ValueError):
                 continue
         return groups
 
-    #----- Lock the given titles to a single catalog (source of truth on the docs)
+    # ----- Lock the given titles to a single catalog (source of truth on the docs)
     async def _apply_exclusivity_to_docs(self, items: List[dict], catalog_id: str, searchable: bool) -> None:
         for (db_index, collection), ids in self._group_items_by_storage(items).items():
             db_key = f"storage_{db_index}"
             if db_key not in self.dbs:
                 continue
             try:
-                #----- Metadata-only change: never touch updated_on (keeps Latest order)
+                # ----- Metadata-only change: never touch updated_on (keeps Latest order)
                 await self.dbs[db_key][collection].update_many(
                     {"tmdb_id": {"$in": ids}},
-                    {"$set": {"exclusive_catalog_id": str(catalog_id), "exclusive_searchable": bool(searchable)}},
+                    {"$set": {"exclusive_catalog_id": str(
+                        catalog_id), "exclusive_searchable": bool(searchable)}},
                 )
             except Exception as e:
-                LOGGER.error(f"_apply_exclusivity_to_docs failed for {db_key}.{collection}: {e}")
+                LOGGER.error(
+                    f"_apply_exclusivity_to_docs failed for {db_key}.{collection}: {e}")
 
-    #----- Unlock the given titles so they return to default/auto/other catalogs
+    # ----- Unlock the given titles so they return to default/auto/other catalogs
     async def _clear_exclusivity_from_docs(self, items: List[dict]) -> None:
         for (db_index, collection), ids in self._group_items_by_storage(items).items():
             db_key = f"storage_{db_index}"
             if db_key not in self.dbs:
                 continue
             try:
-                #----- Unlocking is metadata-only: keep updated_on so titles slot back into
-                #----- their original place in Latest (auto.synced reset lets sync re-add)
+                # ----- Unlocking is metadata-only: keep updated_on so titles slot back into
+                # ----- their original place in Latest (auto.synced reset lets sync re-add)
                 await self.dbs[db_key][collection].update_many(
                     {"tmdb_id": {"$in": ids}},
                     {"$unset": {"exclusive_catalog_id": "", "exclusive_searchable": ""},
                      "$set": {"auto_catalog.synced": False}},
                 )
             except Exception as e:
-                LOGGER.error(f"_clear_exclusivity_from_docs failed for {db_key}.{collection}: {e}")
+                LOGGER.error(
+                    f"_clear_exclusivity_from_docs failed for {db_key}.{collection}: {e}")
 
-    #----- Remove the given titles from every catalog except the one that owns them
+    # ----- Remove the given titles from every catalog except the one that owns them
     async def purge_items_from_other_catalogs(self, catalog_id: str, items: List[dict]) -> None:
         ids_by_type: Dict[str, set] = {}
         for it in items or []:
             try:
-                ids_by_type.setdefault(self._collection_for(it.get("media_type", "movie")), set()).add(int(it.get("tmdb_id")))
+                ids_by_type.setdefault(self._collection_for(
+                    it.get("media_type", "movie")), set()).add(int(it.get("tmdb_id")))
             except (TypeError, ValueError):
                 continue
         if not ids_by_type:
@@ -739,18 +764,20 @@ class Database:
             except Exception as e:
                 LOGGER.error(f"purge_items_from_other_catalogs failed: {e}")
 
-    #----- Mark a single freshly-added title exclusive to its catalog
+    # ----- Mark a single freshly-added title exclusive to its catalog
     async def mark_item_exclusive(self, catalog_id: str, tmdb_id: int, db_index: int, media_type: str, searchable: bool) -> None:
-        item = {"tmdb_id": int(tmdb_id), "db_index": int(db_index), "media_type": self._collection_for(media_type)}
+        item = {"tmdb_id": int(tmdb_id), "db_index": int(
+            db_index), "media_type": self._collection_for(media_type)}
         await self._apply_exclusivity_to_docs([item], catalog_id, searchable)
         await self.purge_items_from_other_catalogs(catalog_id, [item])
 
-    #----- Clear exclusivity for a single title (e.g. removed from its catalog)
+    # ----- Clear exclusivity for a single title (e.g. removed from its catalog)
     async def clear_item_exclusive(self, tmdb_id: int, db_index: int, media_type: str) -> None:
-        item = {"tmdb_id": int(tmdb_id), "db_index": int(db_index), "media_type": self._collection_for(media_type)}
+        item = {"tmdb_id": int(tmdb_id), "db_index": int(
+            db_index), "media_type": self._collection_for(media_type)}
         await self._clear_exclusivity_from_docs([item])
 
-    #----- Override one title's visibility inside a single catalog
+    # ----- Override one title's visibility inside a single catalog
     async def set_catalog_item_visibility(
         self, catalog_id: str, tmdb_id: int, db_index: int, media_type: str,
         visibility: str, allowed_tokens: Optional[List[str]] = None,
@@ -772,7 +799,7 @@ class Database:
         except Exception:
             return False
 
-    #----- Set a title's own visibility (source of truth for default + custom catalogs)
+    # ----- Set a title's own visibility (source of truth for default + custom catalogs)
     async def set_media_visibility(
         self, tmdb_id: int, db_index: int, media_type: str,
         visibility: str, allowed_tokens: Optional[List[str]] = None,
@@ -786,7 +813,7 @@ class Database:
         db_key = f"storage_{int(db_index)}"
         if db_key in self.dbs:
             try:
-                #----- Metadata-only change: never touch updated_on (keeps Latest order)
+                # ----- Metadata-only change: never touch updated_on (keeps Latest order)
                 await self.dbs[db_key][collection].update_one(
                     {"tmdb_id": int(tmdb_id)},
                     {"$set": {"visibility": visibility, "allowed_tokens": tokens}},
@@ -794,10 +821,11 @@ class Database:
             except Exception as e:
                 LOGGER.error(f"set_media_visibility doc update failed: {e}")
 
-        #----- Keep any catalog items in sync so custom-catalog filtering matches
+        # ----- Keep any catalog items in sync so custom-catalog filtering matches
         try:
             result = await self.dbs["tracking"]["custom_catalogs"].update_many(
-                {"items": {"$elemMatch": {"tmdb_id": int(tmdb_id), "db_index": int(db_index), "media_type": collection}}},
+                {"items": {"$elemMatch": {"tmdb_id": int(tmdb_id), "db_index": int(
+                    db_index), "media_type": collection}}},
                 {"$set": {
                     "items.$.visibility": visibility,
                     "items.$.allowed_tokens": tokens,
@@ -808,7 +836,7 @@ class Database:
         except Exception:
             return 0
 
-    #----- A title's own visibility (from its media document)
+    # ----- A title's own visibility (from its media document)
     async def get_media_visibility(self, tmdb_id: int, db_index: int, media_type: str) -> Optional[dict]:
         doc = await self.get_document(media_type, int(tmdb_id), int(db_index))
         if not doc:
@@ -884,7 +912,7 @@ class Database:
             return False
 
     async def find_media_doc(self, media_type: str, tmdb_id: int) -> Optional[Tuple[dict, int]]:
-        #----- Locate a media doc by tmdb_id across storage DBs -> (doc, db_index) or None
+        # ----- Locate a media doc by tmdb_id across storage DBs -> (doc, db_index) or None
         collection_name = self._collection_for(media_type)
         try:
             tmdb_id = int(tmdb_id)
@@ -902,7 +930,7 @@ class Database:
         return None
 
     async def purge_media_from_catalogs(self, tmdb_id: int, media_type: str) -> int:
-        #----- Remove a media item from every catalog (auto + manual) by tmdb_id + media_type
+        # ----- Remove a media item from every catalog (auto + manual) by tmdb_id + media_type
         if tmdb_id in (None, "", 0):
             return 0
         try:
@@ -927,8 +955,10 @@ class Database:
                                         "$not": [
                                             {
                                                 "$and": [
-                                                    {"$eq": ["$$it.tmdb_id", tmdb_id]},
-                                                    {"$eq": ["$$it.media_type", media_type]},
+                                                    {"$eq": [
+                                                        "$$it.tmdb_id", tmdb_id]},
+                                                    {"$eq": [
+                                                        "$$it.media_type", media_type]},
                                                 ]
                                             }
                                         ]
@@ -947,7 +977,8 @@ class Database:
                 )
             return result.modified_count
         except Exception as e:
-            LOGGER.error(f"Failed to purge tmdb_id {tmdb_id} from catalogs: {e}")
+            LOGGER.error(
+                f"Failed to purge tmdb_id {tmdb_id} from catalogs: {e}")
             return 0
 
     async def custom_catalog_contains_item(
@@ -982,7 +1013,8 @@ class Database:
 
         raw_items = catalog.get("items", []) or []
         if db_media_type:
-            raw_items = [item for item in raw_items if item.get("media_type") == db_media_type]
+            raw_items = [item for item in raw_items if item.get(
+                "media_type") == db_media_type]
 
         total_count = len(raw_items)
         skip = (page - 1) * page_size
@@ -990,7 +1022,8 @@ class Database:
 
         hydrated_items = await self.get_documents(selected_items)
 
-        total_pages = (total_count + page_size - 1) // page_size if total_count else 0
+        total_pages = (total_count + page_size -
+                       1) // page_size if total_count else 0
         return {
             "catalog": catalog,
             "items": hydrated_items,
@@ -999,10 +1032,10 @@ class Database:
             "total_pages": total_pages,
         }
 
+    # -----
+    # ----- Helper Methods for Repeated Logic
+    # -----
 
-    #-----
-    #----- Helper Methods for Repeated Logic
-    #-----
     def _get_sort_dict(self, sort_params: List[Tuple[str, str]]) -> Dict[str, int]:
         if sort_params:
             sort_field, sort_direction = sort_params[0]
@@ -1074,7 +1107,8 @@ class Database:
         try:
             await self.dbs[current_db_key][collection_name].insert_one(document)
             await self.dbs[old_db_key][collection_name].delete_one({"_id": document["_id"]})
-            LOGGER.info(f"✅ Moved document {document.get('tmdb_id')} from {old_db_key} to {current_db_key}")
+            LOGGER.info(
+                f"✅ Moved document {document.get('tmdb_id')} from {old_db_key} to {current_db_key}")
             return True
         except Exception as e:
             LOGGER.error(f"Error moving document to {current_db_key}: {e}")
@@ -1090,12 +1124,12 @@ class Database:
         LOGGER.info(f"Switched to storage_{self.current_db_index}")
         return await func(*args)
 
-    #----- Map any media_type spelling to its collection name
+    # ----- Map any media_type spelling to its collection name
     @staticmethod
     def _collection_for(media_type: str) -> str:
         return "tv" if str(media_type).lower() in ("tv", "series") else "movie"
 
-    #----- Load a doc by tmdb_id, apply an async mutator, and save only if it changed
+    # ----- Load a doc by tmdb_id, apply an async mutator, and save only if it changed
     async def _edit_media_doc(self, collection_name: str, tmdb_id: int, db_index: int, mutate) -> bool:
         db_key = f"storage_{db_index}"
         doc = await self.dbs[db_key][collection_name].find_one({"tmdb_id": tmdb_id})
@@ -1107,7 +1141,7 @@ class Database:
         result = await self.dbs[db_key][collection_name].replace_one({"tmdb_id": tmdb_id}, doc)
         return result.modified_count > 0
 
-    #----- Locate an existing doc across storage DBs by imdb_id, then tmdb_id, then title+year
+    # ----- Locate an existing doc across storage DBs by imdb_id, then tmdb_id, then title+year
     async def _find_existing_media(
         self, collection_name: str, imdb_id, tmdb_id, title, release_year, total_storage_dbs: int, kitsu_id=None
     ) -> Tuple[Optional[dict], Optional[str], Optional[int]]:
@@ -1130,19 +1164,19 @@ class Database:
                 return doc, f"storage_{db_index}", db_index
         return None, None, None
 
-
-    #-----
-    #----- Multi Database Method for insert/update/delete/list
-    #-----
+    # -----
+    # ----- Multi Database Method for insert/update/delete/list
+    # -----
 
     async def _build_part_id_and_size(self, parts: List[dict], archive: Optional[str] = None) -> Tuple[str, str]:
         sorted_parts = sorted(parts, key=lambda p: p.get("part_number", 0))
-        payload = {"parts": [{"chat_id": p["chat_id"], "msg_id": p["msg_id"]} for p in sorted_parts]}
+        payload = {"parts": [{"chat_id": p["chat_id"],
+                              "msg_id": p["msg_id"]} for p in sorted_parts]}
         if archive == "zip":
             payload["zip"] = True
         encoded = await encode_string(payload)
         total_bytes = sum(p.get("size_bytes", 0) for p in sorted_parts)
-        from Backend.helper.pyro import get_readable_file_size 
+        from Backend.helper.pyro import get_readable_file_size
         size_str = get_readable_file_size(total_bytes)
         return encoded, size_str
 
@@ -1193,9 +1227,10 @@ class Database:
                 for q in movie.get("telegram", []):
                     parts = q.get("parts")
                     if parts and any(p.get("chat_id") == channel and p.get("msg_id") == msg_id for p in parts):
-                        remaining = [p for p in parts if not (p.get("chat_id") == channel and p.get("msg_id") == msg_id)]
+                        remaining = [p for p in parts if not (
+                            p.get("chat_id") == channel and p.get("msg_id") == msg_id)]
                         if not remaining:
-                            continue  #----- last part removed: drop the whole quality entry
+                            continue  # ----- last part removed: drop the whole quality entry
                         new_id, new_size = await self._build_part_id_and_size(remaining)
                         q["parts"] = remaining
                         q["id"] = new_id
@@ -1212,7 +1247,8 @@ class Database:
                 return True
 
             tv = await db["tv"].find_one(
-                {"seasons.episodes.telegram.parts": {"$elemMatch": {"chat_id": channel, "msg_id": msg_id}}}
+                {"seasons.episodes.telegram.parts": {
+                    "$elemMatch": {"chat_id": channel, "msg_id": msg_id}}}
             )
             if tv:
                 for season in tv.get("seasons", []):
@@ -1221,7 +1257,8 @@ class Database:
                         for q in episode.get("telegram", []):
                             parts = q.get("parts")
                             if parts and any(p.get("chat_id") == channel and p.get("msg_id") == msg_id for p in parts):
-                                remaining = [p for p in parts if not (p.get("chat_id") == channel and p.get("msg_id") == msg_id)]
+                                remaining = [p for p in parts if not (
+                                    p.get("chat_id") == channel and p.get("msg_id") == msg_id)]
                                 if not remaining:
                                     continue
                                 new_id, new_size = await self._build_part_id_and_size(remaining)
@@ -1230,8 +1267,10 @@ class Database:
                                 q["size"] = new_size
                             new_telegram.append(q)
                         episode["telegram"] = new_telegram
-                    season["episodes"] = [e for e in season.get("episodes", []) if e.get("telegram")]
-                tv["seasons"] = [s for s in tv.get("seasons", []) if s.get("episodes")]
+                    season["episodes"] = [e for e in season.get(
+                        "episodes", []) if e.get("telegram")]
+                tv["seasons"] = [s for s in tv.get(
+                    "seasons", []) if s.get("episodes")]
 
                 if len(tv["seasons"]) == 0:
                     await db["tv"].delete_one({"_id": tv["_id"]})
@@ -1300,7 +1339,8 @@ class Database:
                 genres=metadata_info['genres'],
                 description=metadata_info['description'],
                 rating=metadata_info['rate'],
-                release_year=metadata_info['year'] if isinstance(metadata_info.get('year'), int) else (int(str(metadata_info.get('year'))[:4]) if metadata_info.get('year') else None),
+                release_year=metadata_info['year'] if isinstance(metadata_info.get('year'), int) else (
+                    int(str(metadata_info.get('year'))[:4]) if metadata_info.get('year') else None),
                 release_year_end=metadata_info.get('year_end') or None,
                 poster=metadata_info['poster'],
                 backdrop=metadata_info['backdrop'],
@@ -1326,7 +1366,8 @@ class Database:
                 genres=metadata_info['genres'],
                 description=metadata_info['description'],
                 rating=metadata_info['rate'],
-                release_year=metadata_info['year'] if isinstance(metadata_info.get('year'), int) else (int(str(metadata_info.get('year'))[:4]) if metadata_info.get('year') else None),
+                release_year=metadata_info['year'] if isinstance(metadata_info.get('year'), int) else (
+                    int(str(metadata_info.get('year'))[:4]) if metadata_info.get('year') else None),
                 release_year_end=metadata_info.get('year_end') or None,
                 poster=metadata_info['poster'],
                 backdrop=metadata_info['backdrop'],
@@ -1402,10 +1443,11 @@ class Database:
             result.append(quality_to_update)
         return result
 
-    #----- Identity of a non-split stream for duplicate protection (quality + name + size)
+    # ----- Identity of a non-split stream for duplicate protection (quality + name + size)
     @staticmethod
     def _dup_key(quality: dict) -> tuple:
-        name = re.sub(r"\s+", " ", str(quality.get("name") or "").strip().lower())
+        name = re.sub(
+            r"\s+", " ", str(quality.get("name") or "").strip().lower())
         size = str(quality.get("size") or "").strip().lower()
         return (quality.get("quality"), name, size)
 
@@ -1425,7 +1467,7 @@ class Database:
         replace_mode = SettingsManager.current().replace_mode
 
         if incoming_group_key:
-            #----- Incoming is a split part.
+            # ----- Incoming is a split part.
             if replace_mode:
                 stale = [
                     q for q in existing_qualities
@@ -1443,9 +1485,10 @@ class Database:
                 ]
             return await self._merge_split_part(existing_qualities, quality_to_update)
 
-        #----- Incoming is a normal (non-split) file.
+        # ----- Incoming is a normal (non-split) file.
         if replace_mode:
-            stale = [q for q in existing_qualities if q.get("quality") == target_quality]
+            stale = [q for q in existing_qualities if q.get(
+                "quality") == target_quality]
             for q in stale:
                 await self._queue_quality_deletion(q)
             existing_qualities = [
@@ -1454,12 +1497,13 @@ class Database:
             existing_qualities.append(quality_to_update)
             return existing_qualities
 
-        #----- REPLACE_MODE off: skip exact duplicates when protection is on, else stack.
+        # ----- REPLACE_MODE off: skip exact duplicates when protection is on, else stack.
         if SettingsManager.current().duplicate_protection and not is_personal:
             key = self._dup_key(quality_to_update)
             for q in existing_qualities:
                 if not q.get("group_key") and self._dup_key(q) == key:
-                    LOGGER.info(f"Duplicate protection: skipped existing stream '{quality_to_update.get('name')}'.")
+                    LOGGER.info(
+                        f"Duplicate protection: skipped existing stream '{quality_to_update.get('name')}'.")
                     if status is not None:
                         status["duplicate_skipped"] = True
                     return existing_qualities
@@ -1488,7 +1532,7 @@ class Database:
             "movie", imdb_id, tmdb_id, title, release_year, total_storage_dbs, kitsu_id=kitsu_id
         )
 
-        #----- INSERT NEW MOVIE ----------------
+        # ----- INSERT NEW MOVIE ----------------
         if not existing_movie:
             try:
                 movie_dict["db_index"] = self.current_db_index
@@ -1500,7 +1544,7 @@ class Database:
                     return await self._handle_storage_error(self.update_movie, movie_data, total_storage_dbs=total_storage_dbs)
                 return None
 
-        #----- UPDATE MOVIE ----------------
+        # ----- UPDATE MOVIE ----------------
         movie_id = existing_movie["_id"]
 
         if imdb_id and not existing_movie.get("imdb_id"):
@@ -1515,7 +1559,8 @@ class Database:
         existing_qualities = existing_movie.get("telegram", [])
 
         existing_qualities = await self._apply_quality_update(
-            existing_qualities, quality_to_update, self._is_personal_tmdb(tmdb_id), status
+            existing_qualities, quality_to_update, self._is_personal_tmdb(
+                tmdb_id), status
         )
 
         existing_movie["telegram"] = existing_qualities
@@ -1534,7 +1579,8 @@ class Database:
             await self.dbs[existing_db_key]["movie"].replace_one({"_id": movie_id}, existing_movie)
             return movie_id
         except Exception as e:
-            LOGGER.error(f"Failed to update movie {tmdb_id} in {existing_db_key}: {e}")
+            LOGGER.error(
+                f"Failed to update movie {tmdb_id} in {existing_db_key}: {e}")
             if any(keyword in str(e).lower() for keyword in ["storage", "quota"]):
                 return await self._handle_storage_error(self.update_movie, movie_data, total_storage_dbs=total_storage_dbs)
 
@@ -1558,7 +1604,7 @@ class Database:
             "tv", imdb_id, tmdb_id, title, release_year, total_storage_dbs, kitsu_id=kitsu_id
         )
 
-        #----- INSERT NEW TV ----------------
+        # ----- INSERT NEW TV ----------------
         if not existing_tv:
             try:
                 tv_show_dict["db_index"] = self.current_db_index
@@ -1570,7 +1616,7 @@ class Database:
                     return await self._handle_storage_error(self.update_tv_show, tv_show_data, total_storage_dbs=total_storage_dbs)
                 return None
 
-        #----- UPDATE TV ----------------
+        # ----- UPDATE TV ----------------
         tv_id = existing_tv["_id"]
 
         if imdb_id and not existing_tv.get("imdb_id"):
@@ -1585,7 +1631,7 @@ class Database:
         for season in tv_show_dict["seasons"]:
             existing_season = next(
                 (s for s in existing_tv["seasons"]
-                if s["season_number"] == season["season_number"]),
+                 if s["season_number"] == season["season_number"]),
                 None
             )
 
@@ -1596,7 +1642,7 @@ class Database:
             for episode in season["episodes"]:
                 existing_episode = next(
                     (e for e in existing_season["episodes"]
-                    if e["episode_number"] == episode["episode_number"]),
+                     if e["episode_number"] == episode["episode_number"]),
                     None
                 )
 
@@ -1619,12 +1665,13 @@ class Database:
 
                 for quality in episode["telegram"]:
                     existing_episode["telegram"] = await self._apply_quality_update(
-                        existing_episode["telegram"], quality, self._is_personal_tmdb(tmdb_id), status
+                        existing_episode["telegram"], quality, self._is_personal_tmdb(
+                            tmdb_id), status
                     )
 
         existing_tv["updated_on"] = datetime.utcnow()
 
-        #----- MOVE DB IF NEEDED ----------------
+        # ----- MOVE DB IF NEEDED ----------------
         if existing_db_index != self.current_db_index:
             try:
                 if await self._move_document("tv", existing_tv, existing_db_index):
@@ -1639,13 +1686,15 @@ class Database:
             await self.dbs[existing_db_key]["tv"].replace_one({"_id": tv_id}, existing_tv)
             return tv_id
         except Exception as e:
-            LOGGER.error(f"Failed to update TV show {tmdb_id} in {existing_db_key}: {e}")
+            LOGGER.error(
+                f"Failed to update TV show {tmdb_id} in {existing_db_key}: {e}")
             if any(keyword in str(e).lower() for keyword in ["storage", "quota"]):
                 return await self._handle_storage_error(self.update_tv_show, tv_show_data, total_storage_dbs=total_storage_dbs)
-    
+
     async def sort_movies(self, sort_params, page, page_size, genre_filter=None, extra_filter=None):
         sort_dict = self._get_sort_dict(sort_params)
-        filter_dict = {"genres": {"$in": [genre_filter]}} if genre_filter else {}
+        filter_dict = {"genres": {
+            "$in": [genre_filter]}} if genre_filter else {}
         if extra_filter:
             filter_dict.update(extra_filter)
         results, dbs_checked, total_count = await self._paginate_collection(
@@ -1662,7 +1711,8 @@ class Database:
 
     async def sort_tv_shows(self, sort_params, page, page_size, genre_filter=None, extra_filter=None):
         sort_dict = self._get_sort_dict(sort_params)
-        filter_dict = {"genres": {"$in": [genre_filter]}} if genre_filter else {}
+        filter_dict = {"genres": {
+            "$in": [genre_filter]}} if genre_filter else {}
         if extra_filter:
             filter_dict.update(extra_filter)
         results, dbs_checked, total_count = await self._paginate_collection(
@@ -1678,99 +1728,98 @@ class Database:
         }
 
     async def search_documents(
-            self, 
-            query: str, 
-            page: int, 
-            page_size: int,
-            extra_filter: Optional[dict] = None
-        ) -> dict:
+        self,
+        query: str,
+        page: int,
+        page_size: int,
+        extra_filter: Optional[dict] = None
+    ) -> dict:
 
-            skip = (page - 1) * page_size
-            
-            words = query.split()
-            regex_query = {
-                '$regex': '.*' + '.*'.join(words) + '.*', 
-                '$options': 'i'
-            }
+        skip = (page - 1) * page_size
 
-            tv_match = {"$or": [
-                {"title": regex_query},
-                {"title_english": regex_query},
-                {"original_title": regex_query},
-                {"seasons.episodes.telegram.name": regex_query}
-            ]}
-            movie_match = {"$or": [
-                {"title": regex_query},
-                {"title_english": regex_query},
-                {"original_title": regex_query},
-                {"telegram.name": regex_query}
-            ]}
-            if extra_filter:
-                tv_match = {"$and": [tv_match, extra_filter]}
-                movie_match = {"$and": [movie_match, extra_filter]}
+        words = query.split()
+        regex_query = {
+            '$regex': '.*' + '.*'.join(words) + '.*',
+            '$options': 'i'
+        }
 
-            tv_pipeline = [
-                {"$match": tv_match},
-                {"$project": {
-                    "_id": 1, "tmdb_id": 1, "title": 1, "genres": 1, "rating": 1, "imdb_id": 1,
-                    "release_year": 1, "release_year_end": 1, "poster": 1, "backdrop": 1, "description": 1, "logo": 1,
-                    "media_type": 1, "db_index": 1, "seasons": 1, "title_english": 1, "original_title": 1
-                }}
-            ]
-            
-            movie_pipeline = [
-                {"$match": movie_match},
-                {"$project": {
-                    "_id": 1, "tmdb_id": 1, "title": 1, "genres": 1, "rating": 1,
-                    "release_year": 1, "release_year_end": 1, "poster": 1, "backdrop": 1, "description": 1,
-                    "media_type": 1, "db_index": 1, "imdb_id": 1, "logo": 1, "telegram": 1, "title_english": 1, "original_title": 1
-                }}
-            ]
-            
-            results = []
-            dbs_checked = []
-            
-            active_db_key = f"storage_{self.current_db_index}"
-            active_db = self.dbs[active_db_key]
-            dbs_checked.append(self.current_db_index)
-            
-            tv_results = await active_db["tv"].aggregate(tv_pipeline).to_list(None)
-            movie_results = await active_db["movie"].aggregate(movie_pipeline).to_list(None)
-            combined = tv_results + movie_results
-            results.extend(combined)
-            
-            if len(results) < page_size:
-                previous_db_index = self.current_db_index - 1
-                while previous_db_index > 0 and len(results) < page_size:
-                    prev_db_key = f"storage_{previous_db_index}"
-                    prev_db = self.dbs[prev_db_key]
-                    tv_results_prev = await prev_db["tv"].aggregate(tv_pipeline).to_list(None)
-                    movie_results_prev = await prev_db["movie"].aggregate(movie_pipeline).to_list(None)
-                    combined_prev = tv_results_prev + movie_results_prev
-                    results.extend(combined_prev)
-                    dbs_checked.append(previous_db_index)
-                    previous_db_index -= 1
+        tv_match = {"$or": [
+            {"title": regex_query},
+            {"title_english": regex_query},
+            {"original_title": regex_query},
+            {"seasons.episodes.telegram.name": regex_query}
+        ]}
+        movie_match = {"$or": [
+            {"title": regex_query},
+            {"title_english": regex_query},
+            {"original_title": regex_query},
+            {"telegram.name": regex_query}
+        ]}
+        if extra_filter:
+            tv_match = {"$and": [tv_match, extra_filter]}
+            movie_match = {"$and": [movie_match, extra_filter]}
 
-            total_count = 0
-            for db_index in dbs_checked:
-                key = f"storage_{db_index}"
-                db = self.dbs[key]
-                tv_count = await db["tv"].count_documents(tv_match)
-                movie_count = await db["movie"].count_documents(movie_match)
-                total_count += (tv_count + movie_count)
-            
-            paged_results = results[skip:skip + page_size]
+        tv_pipeline = [
+            {"$match": tv_match},
+            {"$project": {
+                "_id": 1, "tmdb_id": 1, "title": 1, "genres": 1, "rating": 1, "imdb_id": 1,
+                "release_year": 1, "release_year_end": 1, "poster": 1, "backdrop": 1, "description": 1, "logo": 1,
+                "media_type": 1, "db_index": 1, "seasons": 1, "title_english": 1, "original_title": 1
+            }}
+        ]
 
-            return {
-                "total_count": total_count,
-                "results": [convert_objectid_to_str(doc) for doc in paged_results]
-            }
+        movie_pipeline = [
+            {"$match": movie_match},
+            {"$project": {
+                "_id": 1, "tmdb_id": 1, "title": 1, "genres": 1, "rating": 1,
+                "release_year": 1, "release_year_end": 1, "poster": 1, "backdrop": 1, "description": 1,
+                "media_type": 1, "db_index": 1, "imdb_id": 1, "logo": 1, "telegram": 1, "title_english": 1, "original_title": 1
+            }}
+        ]
 
+        results = []
+        dbs_checked = []
+
+        active_db_key = f"storage_{self.current_db_index}"
+        active_db = self.dbs[active_db_key]
+        dbs_checked.append(self.current_db_index)
+
+        tv_results = await active_db["tv"].aggregate(tv_pipeline).to_list(None)
+        movie_results = await active_db["movie"].aggregate(movie_pipeline).to_list(None)
+        combined = tv_results + movie_results
+        results.extend(combined)
+
+        if len(results) < page_size:
+            previous_db_index = self.current_db_index - 1
+            while previous_db_index > 0 and len(results) < page_size:
+                prev_db_key = f"storage_{previous_db_index}"
+                prev_db = self.dbs[prev_db_key]
+                tv_results_prev = await prev_db["tv"].aggregate(tv_pipeline).to_list(None)
+                movie_results_prev = await prev_db["movie"].aggregate(movie_pipeline).to_list(None)
+                combined_prev = tv_results_prev + movie_results_prev
+                results.extend(combined_prev)
+                dbs_checked.append(previous_db_index)
+                previous_db_index -= 1
+
+        total_count = 0
+        for db_index in dbs_checked:
+            key = f"storage_{db_index}"
+            db = self.dbs[key]
+            tv_count = await db["tv"].count_documents(tv_match)
+            movie_count = await db["movie"].count_documents(movie_match)
+            total_count += (tv_count + movie_count)
+
+        paged_results = results[skip:skip + page_size]
+
+        return {
+            "total_count": total_count,
+            "results": [convert_objectid_to_str(doc) for doc in paged_results]
+        }
 
     async def get_media_details(
-        self, 
+        self,
         imdb_id: str = None,
-        season_number: Optional[int] = None, 
+        season_number: Optional[int] = None,
         episode_number: Optional[int] = None,
         kitsu_id: Optional[int] = None,
         absolute_episode: Optional[int] = None,
@@ -1824,7 +1873,7 @@ class Database:
                                         "db_index": db_idx
                                     })
                                     return details
-            
+
             if episode_number is not None and season_number is not None:
                 tv_show = await _find_doc(self.dbs[db_key]["tv"])
                 if tv_show:
@@ -1846,7 +1895,7 @@ class Database:
                                         "db_index": db_idx
                                     })
                                     return details
-            
+
             elif season_number is not None and absolute_episode is None:
                 tv_show = await _find_doc(self.dbs[db_key]["tv"])
                 if tv_show:
@@ -1861,7 +1910,7 @@ class Database:
                                 "db_index": db_idx
                             })
                             return details
-            
+
             else:
                 tv_doc = await _find_doc(self.dbs[db_key]["tv"])
                 if tv_doc:
@@ -1869,19 +1918,19 @@ class Database:
                     tv_doc["type"] = "tv"
                     tv_doc["db_index"] = db_idx
                     return tv_doc
-                
+
                 movie_doc = await _find_doc(self.dbs[db_key]["movie"])
                 if movie_doc:
                     movie_doc = convert_objectid_to_str(movie_doc)
                     movie_doc["type"] = "movie"
                     movie_doc["db_index"] = db_idx
                     return movie_doc
-        
+
         return None
 
-    #-----
-    #----- DB Method for Edit Post
-    #-----
+    # -----
+    # ----- DB Method for Edit Post
+    # -----
 
     async def get_document(self, media_type: str, tmdb_id: int, db_index: int) -> Optional[Dict[str, Any]]:
         db_key = f"storage_{db_index}"
@@ -1901,7 +1950,8 @@ class Database:
                 db_index = int(ref.get("db_index", 1))
             except (TypeError, ValueError):
                 continue
-            collection_name = self._collection_for(ref.get("media_type", "movie"))
+            collection_name = self._collection_for(
+                ref.get("media_type", "movie"))
             groups.setdefault((db_index, collection_name), []).append(tmdb_id)
             normalized.append((db_index, collection_name, tmdb_id))
 
@@ -1911,16 +1961,19 @@ class Database:
             if db_key not in self.dbs:
                 continue
             try:
-                cursor = self.dbs[db_key][collection_name].find({"tmdb_id": {"$in": ids}})
+                cursor = self.dbs[db_key][collection_name].find(
+                    {"tmdb_id": {"$in": ids}})
                 async for document in cursor:
                     document = convert_objectid_to_str(document)
                     try:
-                        key = (db_index, collection_name, int(document.get("tmdb_id")))
+                        key = (db_index, collection_name,
+                               int(document.get("tmdb_id")))
                     except (TypeError, ValueError):
                         continue
                     lookup[key] = document
             except Exception as e:
-                LOGGER.error(f"get_documents batch fetch failed for {db_key}/{collection_name}: {e}")
+                LOGGER.error(
+                    f"get_documents batch fetch failed for {db_key}/{collection_name}: {e}")
 
         ordered: List[Dict[str, Any]] = []
         for key in normalized:
@@ -1950,36 +2003,43 @@ class Database:
                 db_index_int = int(db_index)
                 next_db_index = (db_index_int % total_storage_dbs) + 1
                 if next_db_index == 1:
-                    LOGGER.warning("⚠️ All storage databases are full! Add more.")
+                    LOGGER.warning(
+                        "⚠️ All storage databases are full! Add more.")
                     return False
 
                 new_db_key = f"storage_{next_db_index}"
-                LOGGER.info(f"Switching from {db_key} to {new_db_key} due to storage error.")
+                LOGGER.info(
+                    f"Switching from {db_key} to {new_db_key} due to storage error.")
 
                 try:
                     old_doc = await self.dbs[db_key][collection_name].find_one({"tmdb_id": int(tmdb_id)})
                     if not old_doc:
-                        LOGGER.error(f"Document with tmdb_id {tmdb_id} not found in {db_key} during migration.")
+                        LOGGER.error(
+                            f"Document with tmdb_id {tmdb_id} not found in {db_key} during migration.")
                         return False
 
                     old_doc.update(update_data)
                     old_doc["db_index"] = next_db_index
                     old_doc.pop("_id", None)
                     insert_result = await self.dbs[new_db_key][collection_name].insert_one(old_doc)
-                    LOGGER.info(f"Inserted document {insert_result.inserted_id} into {new_db_key}")
+                    LOGGER.info(
+                        f"Inserted document {insert_result.inserted_id} into {new_db_key}")
                     await self.dbs[db_key][collection_name].delete_one({"tmdb_id": int(tmdb_id)})
-                    LOGGER.info(f"Deleted document tmdb_id {tmdb_id} from {db_key}")
+                    LOGGER.info(
+                        f"Deleted document tmdb_id {tmdb_id} from {db_key}")
                     self.current_db_index = next_db_index
                     await self.update_current_db_index()
-                    LOGGER.info(f"Switched to {new_db_key} and document migrated successfully.")
+                    LOGGER.info(
+                        f"Switched to {new_db_key} and document migrated successfully.")
                     return True
 
                 except Exception as migrate_error:
-                    LOGGER.error(f"Error migrating document tmdb_id {tmdb_id} to {new_db_key}: {migrate_error}")
+                    LOGGER.error(
+                        f"Error migrating document tmdb_id {tmdb_id} to {new_db_key}: {migrate_error}")
                     return False
             raise
 
-    #----- Queue deletion of the Telegram message(s) backing a quality (split or single)
+    # ----- Queue deletion of the Telegram message(s) backing a quality (split or single)
     async def _queue_quality_deletion(self, quality: dict) -> None:
         parts = quality.get("parts")
         if parts:
@@ -2020,7 +2080,8 @@ class Database:
         result = await self.dbs[db_key][collection_name].delete_one({"tmdb_id": tmdb_id})
         if result.deleted_count > 0:
             await self.purge_media_from_catalogs(tmdb_id, collection_name)
-            LOGGER.info(f"{media_type} with tmdb_id {tmdb_id} deleted successfully.")
+            LOGGER.info(
+                f"{media_type} with tmdb_id {tmdb_id} deleted successfully.")
             return True
         LOGGER.info(f"No document found with tmdb_id {tmdb_id}.")
         return False
@@ -2028,15 +2089,15 @@ class Database:
     async def get_title_by_stream_id(self, stream_id_hash: str) -> Optional[str]:
         for i in range(1, self.current_db_index + 1):
             db = self.dbs[f"storage_{i}"]
-            
-            #----- Check Movies
+
+            # ----- Check Movies
             movie = await db["movie"].find_one({"telegram.id": stream_id_hash})
             if movie and "telegram" in movie:
                 for t in movie["telegram"]:
                     if t.get("id") == stream_id_hash:
                         return movie.get("title")
 
-            #----- Check TV Shows
+            # ----- Check TV Shows
             tv = await db["tv"].find_one({"seasons.episodes.telegram.id": stream_id_hash})
             if tv and "seasons" in tv:
                 title = tv.get("title", "Unknown Series")
@@ -2053,8 +2114,8 @@ class Database:
     async def delete_media_by_stream_id(self, stream_id_hash: str, delete_file: bool = False) -> bool:
         for i in range(1, self.current_db_index + 1):
             db = self.dbs[f"storage_{i}"]
-            
-            #----- Check Movies
+
+            # ----- Check Movies
             movie = await db["movie"].find_one({"telegram.id": stream_id_hash})
             if movie:
                 if delete_file:
@@ -2062,7 +2123,8 @@ class Database:
                         if q.get("id") == stream_id_hash:
                             await self._queue_quality_deletion(q)
                             break
-                movie["telegram"] = [q for q in movie.get("telegram", []) if q.get("id") != stream_id_hash]
+                movie["telegram"] = [q for q in movie.get(
+                    "telegram", []) if q.get("id") != stream_id_hash]
                 if len(movie["telegram"]) == 0:
                     await db["movie"].delete_one({"_id": movie["_id"]})
                     await self.purge_media_from_catalogs(movie.get("tmdb_id"), "movie")
@@ -2071,7 +2133,7 @@ class Database:
                     await db["movie"].replace_one({"_id": movie["_id"]}, movie)
                 return True
 
-            #----- Check TV Shows
+            # ----- Check TV Shows
             tv = await db["tv"].find_one({"seasons.episodes.telegram.id": stream_id_hash})
             if tv:
                 for season in tv.get("seasons", []):
@@ -2080,11 +2142,14 @@ class Database:
                             if q.get("id") == stream_id_hash:
                                 if delete_file:
                                     await self._queue_quality_deletion(q)
-                                episode["telegram"] = [t for t in episode.get("telegram", []) if t.get("id") != stream_id_hash]
+                                episode["telegram"] = [t for t in episode.get(
+                                    "telegram", []) if t.get("id") != stream_id_hash]
                                 if len(episode["telegram"]) == 0:
-                                    season["episodes"] = [e for e in season.get("episodes", []) if e.get("episode_number") != episode.get("episode_number")]
+                                    season["episodes"] = [e for e in season.get("episodes", []) if e.get(
+                                        "episode_number") != episode.get("episode_number")]
                                     if len(season["episodes"]) == 0:
-                                        tv["seasons"] = [s for s in tv.get("seasons", []) if s.get("season_number") != season.get("season_number")]
+                                        tv["seasons"] = [s for s in tv.get("seasons", []) if s.get(
+                                            "season_number") != season.get("season_number")]
                                         if len(tv["seasons"]) == 0:
                                             await db["tv"].delete_one({"_id": tv["_id"]})
                                             await self.purge_media_from_catalogs(tv.get("tmdb_id"), "tv")
@@ -2118,7 +2183,8 @@ class Database:
                                 await self._queue_quality_deletion(q)
                                 break
                         original_len = len(episode["telegram"])
-                        episode["telegram"] = [q for q in episode["telegram"] if q.get("id") != id]
+                        episode["telegram"] = [
+                            q for q in episode["telegram"] if q.get("id") != id]
                         return original_len > len(episode["telegram"])
             return False
         return await self._edit_media_doc("tv", tmdb_id, db_index, mutate)
@@ -2135,7 +2201,8 @@ class Database:
                             await self._queue_quality_deletion(quality)
                         break
                 original_len = len(episodes)
-                season["episodes"] = [ep for ep in episodes if ep.get("episode_number") != episode_number]
+                season["episodes"] = [ep for ep in episodes if ep.get(
+                    "episode_number") != episode_number]
                 return original_len > len(season["episodes"])
             return False
         return await self._edit_media_doc("tv", tmdb_id, db_index, mutate)
@@ -2150,12 +2217,13 @@ class Database:
                             await self._queue_quality_deletion(quality)
                     break
             original_len = len(seasons)
-            tv["seasons"] = [s for s in seasons if s.get("season_number") != season_number]
+            tv["seasons"] = [s for s in seasons if s.get(
+                "season_number") != season_number]
             return len(tv["seasons"]) != original_len
         return await self._edit_media_doc("tv", tmdb_id, db_index, mutate)
 
+    # ----- Get per-DB statistics (movies, tv shows, used size, etc.)
 
-    #----- Get per-DB statistics (movies, tv shows, used size, etc.)
     async def get_database_stats(self):
         stats = []
         for key in self.dbs.keys():
@@ -2173,14 +2241,12 @@ class Database:
                 })
         return stats
 
-
-
-    #-----
-    #----- API Token Methods
-    #-----
+    # -----
+    # ----- API Token Methods
+    # -----
 
     async def add_api_token(self, name: str, daily_limit_gb: float = None, monthly_limit_gb: float = None, user_id: int = None, subscription_exempt: bool = False) -> dict:
-        #----- If a user_id is provided, return existing token if already created
+        # ----- If a user_id is provided, return existing token if already created
         if user_id:
             existing = await self.dbs["tracking"]["api_tokens"].find_one({"user_id": user_id})
             if existing:
@@ -2211,7 +2277,7 @@ class Database:
         await self.dbs["tracking"]["api_tokens"].insert_one(token_doc)
         return convert_objectid_to_str(token_doc)
 
-    #----- Return the user's token, creating one if none exists
+    # ----- Return the user's token, creating one if none exists
     async def ensure_api_token_for_user(self, user_id: int, name: str = None) -> Optional[dict]:
         if not user_id:
             return None
@@ -2230,15 +2296,15 @@ class Database:
                 {"$set": {"subscription_exempt": False, "expires_at": None}},
             )
 
-    #----- Toggle a token's lifetime (subscription-exempt) flag
+    # ----- Toggle a token's lifetime (subscription-exempt) flag
     async def set_token_lifetime(self, token: str, exempt: bool) -> bool:
         result = await self.dbs["tracking"]["api_tokens"].update_one(
             {"token": token}, {"$set": {"subscription_exempt": bool(exempt)}}
         )
         return result.modified_count > 0
 
-    #----- Set/extend/reduce a token's own expiry (used when subscription mode is off).
-    #----- 'set' with 0/None days clears the expiry (never expires).
+    # ----- Set/extend/reduce a token's own expiry (used when subscription mode is off).
+    # ----- 'set' with 0/None days clears the expiry (never expires).
     async def update_token_expiry(self, token: str, action: str = "set", days: int = 0) -> Optional[dict]:
         doc = await self.dbs["tracking"]["api_tokens"].find_one({"token": token})
         if not doc:
@@ -2246,7 +2312,8 @@ class Database:
         now = datetime.utcnow()
         current = doc.get("expires_at")
         if action == "set":
-            new_expiry = now + timedelta(days=days) if days and days > 0 else None
+            new_expiry = now + \
+                timedelta(days=days) if days and days > 0 else None
         elif action == "extend":
             base = current if (current and current > now) else now
             new_expiry = base + timedelta(days=days)
@@ -2259,11 +2326,12 @@ class Database:
             return None
         await self.dbs["tracking"]["api_tokens"].update_one(
             {"token": token},
-            {"$set": {"expires_at": new_expiry, "subscription_exempt": new_expiry is None}},
+            {"$set": {"expires_at": new_expiry,
+                      "subscription_exempt": new_expiry is None}},
         )
         return await self.get_api_token(token)
 
-    #----- Mark every token that isn't linked to a user as lifetime
+    # ----- Mark every token that isn't linked to a user as lifetime
     async def grant_lifetime_to_unlinked(self) -> int:
         result = await self.dbs["tracking"]["api_tokens"].update_many(
             {"$or": [{"user_id": None}, {"user_id": {"$exists": False}}]},
@@ -2271,7 +2339,7 @@ class Database:
         )
         return result.modified_count
 
-    #----- Count tokens that would stop working if subscription mode is enabled
+    # ----- Count tokens that would stop working if subscription mode is enabled
     async def count_uncovered_tokens(self) -> int:
         tokens = await self.get_all_api_tokens()
         now = datetime.utcnow()
@@ -2281,7 +2349,8 @@ class Database:
                 continue
             exp = t.get("expires_at")
             if exp and exp > now:
-                continue  #----- token has its own live expiry (honoured in sub mode)
+                # ----- token has its own live expiry (honoured in sub mode)
+                continue
             uid = t.get("user_id")
             if not uid:
                 count += 1
@@ -2294,13 +2363,14 @@ class Database:
         doc = await self.dbs["tracking"]["api_tokens"].find_one({"token": token})
         return convert_objectid_to_str(doc) if doc else None
 
-    #----- The (single) token linked to a given user_id, if any
+    # ----- The (single) token linked to a given user_id, if any
     async def get_api_token_by_user(self, user_id: int) -> Optional[dict]:
         doc = await self.dbs["tracking"]["api_tokens"].find_one({"user_id": user_id})
         return convert_objectid_to_str(doc) if doc else None
 
     async def get_all_api_tokens(self) -> List[dict]:
-        cursor = self.dbs["tracking"]["api_tokens"].find().sort("created_at", DESCENDING)
+        cursor = self.dbs["tracking"]["api_tokens"].find().sort(
+            "created_at", DESCENDING)
         tokens = await cursor.to_list(None)
         return [convert_objectid_to_str(token) for token in tokens]
 
@@ -2315,8 +2385,8 @@ class Database:
         return result.modified_count > 0 or result.matched_count > 0
 
     async def link_token_user(self, token: str, user_id: int, name: str = None) -> bool:
-        #----- Link an existing token to a Telegram user_id; elevate to admin when
-        #----- the linked user is the configured owner. Optionally overwrite the name.
+        # ----- Link an existing token to a Telegram user_id; elevate to admin when
+        # ----- the linked user is the configured owner. Optionally overwrite the name.
         update = {"user_id": user_id, "is_admin": self._is_owner(user_id)}
         if name:
             update["name"] = name
@@ -2335,10 +2405,10 @@ class Database:
     async def update_token_usage(self, token: str, bytes_delta: int):
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         month_str = datetime.now(timezone.utc).strftime("%Y-%m")
-        
+
         token_doc = await self.dbs["tracking"]["api_tokens"].find_one({"token": token})
         if not token_doc:
-             return
+            return
 
         current_daily = token_doc.get("usage", {}).get("daily", {})
         if current_daily.get("date") != today_str:
@@ -2377,28 +2447,28 @@ class Database:
         )
         return result.modified_count > 0
 
-    #-----
-    #----- Admin / Link Checker Methods
-    #-----
+    # -----
+    # ----- Admin / Link Checker Methods
+    # -----
     async def flag_dead_link(self, media_type: str, tmdb_id: int, db_index: int, quality_id: str) -> bool:
-        #----- Flag a specific telegram quality entry as is_dead=True
+        # ----- Flag a specific telegram quality entry as is_dead=True
         db_key = f"storage_{db_index}"
-        
+
         if media_type == "movie":
-            #----- Direct update in the telegram array for movies
+            # ----- Direct update in the telegram array for movies
             result = await self.dbs[db_key]["movie"].update_one(
                 {"tmdb_id": tmdb_id, "telegram.id": quality_id},
                 {"$set": {"telegram.$.is_dead": True, "updated_on": datetime.utcnow()}}
             )
             return result.modified_count > 0
-            
+
         elif media_type == "tv":
-            #----- Nested update for TV (arrayFilters needed since we don't know the exact indices)
-            #----- Find the TV show docs
+            # ----- Nested update for TV (arrayFilters needed since we don't know the exact indices)
+            # ----- Find the TV show docs
             tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
             if not tv or "seasons" not in tv:
                 return False
-                
+
             found = False
             for s_idx, season in enumerate(tv["seasons"]):
                 for e_idx, episode in enumerate(season.get("episodes", [])):
@@ -2407,26 +2477,28 @@ class Database:
                             tv["seasons"][s_idx]["episodes"][e_idx]["telegram"][q_idx]["is_dead"] = True
                             found = True
                             break
-                    if found: break
-                if found: break
-                
+                    if found:
+                        break
+                if found:
+                    break
+
             if found:
                 tv["updated_on"] = datetime.utcnow()
                 result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
                 return result.modified_count > 0
-                
+
         return False
 
     async def get_all_dead_links(self) -> List[dict]:
-        #----- Flattened list of all dead links across storage DBs for the Admin UI
+        # ----- Flattened list of all dead links across storage DBs for the Admin UI
         dead_links = []
-        
+
         for i in range(1, self.current_db_index + 1):
             db_key = f"storage_{i}"
             db = self.dbs[db_key]
-            
-            #----- Scan Movies ---
-            #----- Match any movie where at least one telegram entry has is_dead=True
+
+            # ----- Scan Movies ---
+            # ----- Match any movie where at least one telegram entry has is_dead=True
             movie_cursor = db["movie"].find({"telegram.is_dead": True})
             async for movie in movie_cursor:
                 for quality in movie.get("telegram", []):
@@ -2443,10 +2515,11 @@ class Database:
                             "size": quality.get("size"),
                             "date_added": quality.get("date_added")
                         })
-                        
-            #----- Scan TV Shows ---
-            #----- Match any TV where seasons.episodes.telegram.is_dead=True
-            tv_cursor = db["tv"].find({"seasons.episodes.telegram.is_dead": True})
+
+            # ----- Scan TV Shows ---
+            # ----- Match any TV where seasons.episodes.telegram.is_dead=True
+            tv_cursor = db["tv"].find(
+                {"seasons.episodes.telegram.is_dead": True})
             async for tv in tv_cursor:
                 title = tv.get("title")
                 year = tv.get("year")
@@ -2471,22 +2544,23 @@ class Database:
                                     "size": quality.get("size"),
                                     "date_added": quality.get("date_added")
                                 })
-                                
+
         return dead_links
 
-    #-----
-    #----- Stream Analytics
-    #-----
+    # -----
+    # ----- Stream Analytics
+    # -----
 
     async def log_stream_stats(self, stats: dict) -> None:
-        #----- Persist a finished-stream record to the tracking DB for analytics
+        # ----- Persist a finished-stream record to the tracking DB for analytics
         try:
             record = {
                 "stream_id":   stats.get("stream_id"),
                 "msg_id":      stats.get("msg_id"),
                 "chat_id":     stats.get("chat_id"),
                 "dc_id":       stats.get("dc_id"),
-                "title":       stats.get("meta", {}).get("title"),  #----- Added title
+                # ----- Added title
+                "title":       stats.get("meta", {}).get("title"),
                 "user_name":   stats.get("meta", {}).get("user_name"),
                 "token":       stats.get("meta", {}).get("token"),
                 "client_index": stats.get("client_index"),
@@ -2514,11 +2588,11 @@ class Database:
             LOGGER.warning(f"Stream analytics log failed: {e}")
 
     async def get_stream_analytics(self, limit: int = 200) -> dict:
-        #----- Return summary stats + recent stream records from the tracking DB
+        # ----- Return summary stats + recent stream records from the tracking DB
         try:
             col = self.dbs["tracking"]["stream_analytics"]
 
-            #----- Aggregate totals
+            # ----- Aggregate totals
             pipeline = [
                 {"$group": {
                     "_id": None,
@@ -2533,7 +2607,7 @@ class Database:
             summary = agg[0] if agg else {}
             summary.pop("_id", None)
 
-            #----- Per-client breakdown
+            # ----- Per-client breakdown
             per_client_pipeline = [
                 {"$group": {
                     "_id":          "$client_index",
@@ -2547,10 +2621,10 @@ class Database:
             per_client = await col.aggregate(per_client_pipeline).to_list(None)
             for row in per_client:
                 row["client_index"] = row.pop("_id")
-                row["avg_mbps"]     = round(row.get("avg_mbps", 0), 3)
-                row["peak_mbps"]    = round(row.get("peak_mbps", 0), 3)
+                row["avg_mbps"] = round(row.get("avg_mbps", 0), 3)
+                row["peak_mbps"] = round(row.get("peak_mbps", 0), 3)
 
-            #----- Recent records (newest first)
+            # ----- Recent records (newest first)
             recent_cursor = col.find(
                 {},
                 {"_id": 0, "stream_id": 1, "client_index": 1, "dc_id": 1,
@@ -2562,27 +2636,29 @@ class Database:
                 if "logged_at" in r:
                     r["logged_at"] = r["logged_at"].isoformat()
 
-            #----- Most-streamed titles
+            # ----- Most-streamed titles
             top_titles = await col.aggregate([
                 {"$match": {"title": {"$nin": [None, ""]}}},
-                {"$group": {"_id": "$title", "streams": {"$sum": 1}, "total_bytes": {"$sum": "$total_bytes"}}},
+                {"$group": {"_id": "$title", "streams": {"$sum": 1},
+                            "total_bytes": {"$sum": "$total_bytes"}}},
                 {"$sort": {"streams": -1}},
                 {"$limit": 8},
             ]).to_list(None)
             for r in top_titles:
                 r["title"] = r.pop("_id")
 
-            #----- Heaviest viewers (by data transferred)
+            # ----- Heaviest viewers (by data transferred)
             top_users = await col.aggregate([
                 {"$match": {"user_name": {"$nin": [None, ""]}}},
-                {"$group": {"_id": "$user_name", "streams": {"$sum": 1}, "total_bytes": {"$sum": "$total_bytes"}}},
+                {"$group": {"_id": "$user_name", "streams": {"$sum": 1},
+                            "total_bytes": {"$sum": "$total_bytes"}}},
                 {"$sort": {"total_bytes": -1}},
                 {"$limit": 8},
             ]).to_list(None)
             for r in top_users:
                 r["user"] = r.pop("_id")
 
-            #----- Streams & data per day (last 14 days, chronological)
+            # ----- Streams & data per day (last 14 days, chronological)
             per_day = await col.aggregate([
                 {"$group": {
                     "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$logged_at"}},
@@ -2597,7 +2673,8 @@ class Database:
             per_day.reverse()
 
             distinct_users = await col.distinct("user_name")
-            summary["active_users"] = len([u for u in distinct_users if u and u != "Unknown"])
+            summary["active_users"] = len(
+                [u for u in distinct_users if u and u != "Unknown"])
 
             return {
                 "summary":    summary,
@@ -2611,13 +2688,12 @@ class Database:
             LOGGER.error(f"get_stream_analytics error: {e}")
             return {"summary": {}, "per_client": [], "top_titles": [], "top_users": [], "per_day": [], "recent": []}
 
-
-
     @staticmethod
     def _merge_telegram_lists(primary: List[dict], secondary: List[dict]) -> List[dict]:
         merged = list(primary or [])
         existing_ids = {q.get("id") for q in merged if q.get("id")}
-        existing_groups = {q.get("group_key") for q in merged if q.get("group_key")}
+        existing_groups = {q.get("group_key")
+                           for q in merged if q.get("group_key")}
         for q in (secondary or []):
             group_key = q.get("group_key")
             if group_key and group_key in existing_groups:
@@ -2643,7 +2719,7 @@ class Database:
                 continue
 
             target_season.setdefault("episodes", [])
-            episode_map = {e.get("episode_number"): e for e in target_season["episodes"]}
+            episode_map = {e.get("episode_number")                           : e for e in target_season["episodes"]}
             for episode in season.get("episodes", []):
                 episode_number = episode.get("episode_number")
                 target_episode = episode_map.get(episode_number)
@@ -2652,7 +2728,8 @@ class Database:
                     episode_map[episode_number] = episode
                     continue
                 target_episode["telegram"] = self._merge_telegram_lists(
-                    target_episode.get("telegram", []), episode.get("telegram", [])
+                    target_episode.get(
+                        "telegram", []), episode.get("telegram", [])
                 )
         return merged
 
@@ -2731,11 +2808,13 @@ class Database:
         if existing_other:
             if collection_name == "movie":
                 existing_other["telegram"] = self._merge_telegram_lists(
-                    existing_other.get("telegram", []), current_doc.get("telegram", [])
+                    existing_other.get(
+                        "telegram", []), current_doc.get("telegram", [])
                 )
             else:
                 existing_other["seasons"] = self._merge_season_lists(
-                    existing_other.get("seasons", []), current_doc.get("seasons", [])
+                    existing_other.get(
+                        "seasons", []), current_doc.get("seasons", [])
                 )
 
             for field in (

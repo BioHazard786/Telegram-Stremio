@@ -58,6 +58,30 @@ def _resolve_default_id(override_id, filename) -> str | None:
     return None
 
 
+async def _detect_is_anime(result: dict, anime_channel: bool = False) -> bool:
+    if not result:
+        return False
+    if anime_channel or result.get("is_anime") or result.get("kitsu_id"):
+        return True
+    genres = [str(g).lower() for g in (result.get("genres") or [])]
+    is_anim = any("animat" in g or "anime" in g for g in genres)
+    lang = str(result.get("original_language") or "").lower()
+    countries = [str(c).upper() for c in (result.get("origin_country") or [])]
+    is_jp = lang in ("ja", "jpn", "japanese") or "JP" in countries or "JAPAN" in countries
+    if is_anim and (is_jp or any("anime" in g for g in genres)):
+        return True
+    # If animation from Cinemeta without country/lang info, check anizip mappings
+    if is_anim and result.get("imdb_id"):
+        try:
+            from Backend.helper.metadata.providers.kitsu import get_anizip_mappings
+            az = await get_anizip_mappings(result["imdb_id"])
+            if az and az.get("mappings", {}).get("kitsu_id"):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 async def metadata(
     filename: str,
     channel: int,
@@ -125,24 +149,24 @@ async def metadata(
         if episode is None:
             episode = extract_absolute_episode(filename, parsed)
 
-    # On anime channels, recover absolute from the raw filename when
+    # Recover absolute episode from raw filename when
     # PTN/GuessIt treated a numbered release as a movie (no season/episode).
-    anime_channel_early = _is_anime_channel(channel)
-    if (
-        anime_channel_early
-        and not season
-        and not absolute
-        and episode is None
-    ):
+    if not season and not absolute and episode is None:
         abs_ep = extract_absolute_episode(filename, parsed)
         if abs_ep is not None:
             episode = abs_ep
             absolute = True
             parsed["episode"] = abs_ep
 
+    anime_channel = _is_anime_channel(channel)
+
     if not quality:
-        LOGGER.warning(f"Skipping {filename}: No resolution (parsed={parsed})")
-        return None
+        if anime_channel or absolute:
+            quality = "1080p"
+            LOGGER.info(f"No resolution found for anime file {filename}: defaulting to 1080p")
+        else:
+            LOGGER.warning(f"Skipping {filename}: No resolution (parsed={parsed})")
+            return None
     if not title:
         LOGGER.info(f"No title parsed from: {filename} (parsed={parsed})")
         return None
@@ -170,52 +194,82 @@ async def metadata(
         group_key = f"{channel}:{quality}:{_normalize(base)}.zip"
         part_number = 1
 
-    anime_channel = _is_anime_channel(channel)
-
     try:
-        # TV path: classic SxxExx, or absolute/orphan episode on anime channels
-        is_tv = bool(season and episode) or (absolute and episode and anime_channel)
+        # TV path: classic SxxExx, or absolute/orphan episode
+        is_tv = bool(season and episode) or bool(absolute and episode)
         if is_tv:
             if absolute:
                 LOGGER.info(f"Fetching TV metadata (absolute): {title} E{int(episode)} (year={year})")
             else:
                 LOGGER.info(f"Fetching TV metadata: {title} S{int(season):02d}E{int(episode):02d} (year={year})")
             result = None
-            if not default_id and anime_channel:
-                result = await resolve_anime_tv(
-                    title, season, int(episode), encoded_string,
-                    year=year, quality=quality, absolute=absolute,
-                )
-            if result is None and not absolute:
+
+            if absolute:
+                # 1. Absolute episode: Kitsu > TVDB > TMDB anime
+                if not default_id:
+                    result = await resolve_anime_tv(
+                        title, season, int(episode), encoded_string,
+                        year=year, quality=quality, absolute=True,
+                    )
+                # 2. Fallback to standard series with season 1
+                if result is None:
+                    result = await resolve_series(
+                        title, 1, int(episode), encoded_string,
+                        year=year, quality=quality, default_id=default_id,
+                    )
+                    if result:
+                        result["absolute_episode"] = int(episode)
+                        result["episode_number"] = int(episode)
+            elif anime_channel:
+                # Explicit anime channel with SxxExx
+                if not default_id:
+                    result = await resolve_anime_tv(
+                        title, season, int(episode), encoded_string,
+                        year=year, quality=quality, absolute=False,
+                    )
+                if result is None:
+                    result = await resolve_series(
+                        title, int(season), int(episode), encoded_string,
+                        year=year, quality=quality, default_id=default_id,
+                    )
+            else:
+                # Mixed / regular channel with SxxExx: TVDB/TMDB series first, then Kitsu anime fallback
                 result = await resolve_series(
                     title, int(season), int(episode), encoded_string,
                     year=year, quality=quality, default_id=default_id,
                 )
-            # Absolute on non-anime channel: still try series with season 1
-            if result is None and absolute:
-                result = await resolve_series(
-                    title, 1, int(episode), encoded_string,
-                    year=year, quality=quality, default_id=default_id,
-                )
-                if result:
-                    result["absolute_episode"] = int(episode)
-                    result["episode_number"] = int(episode)
+                if result is None and not default_id:
+                    result = await resolve_anime_tv(
+                        title, season, int(episode), encoded_string,
+                        year=year, quality=quality, absolute=False,
+                    )
+
             if result is not None and combined:
                 apply_combined_override(result, combined)
         else:
             LOGGER.info(f"Fetching Movie metadata: {title} (year={year})")
             result = None
-            if not default_id and anime_channel:
-                result = await resolve_anime_movie(
-                    title, encoded_string, year=year, quality=quality
-                )
-            if result is None:
+            if anime_channel:
+                if not default_id:
+                    result = await resolve_anime_movie(
+                        title, encoded_string, year=year, quality=quality
+                    )
+                if result is None:
+                    result = await resolve_movie(
+                        title, encoded_string, year=year, quality=quality, default_id=default_id
+                    )
+            else:
+                # Mixed / regular channel: TMDB/Cinemeta movie first, then Kitsu/TVDB anime movie fallback
                 result = await resolve_movie(
                     title, encoded_string, year=year, quality=quality, default_id=default_id
                 )
+                if result is None and not default_id:
+                    result = await resolve_anime_movie(
+                        title, encoded_string, year=year, quality=quality
+                    )
+
         if result is not None:
-            if anime_channel:
-                result["is_anime"] = True
+            result["is_anime"] = await _detect_is_anime(result, anime_channel)
             result["group_key"] = group_key
             result["part_number"] = part_number
         if result:

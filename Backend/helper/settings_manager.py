@@ -44,6 +44,7 @@ _DEFAULTS: Dict[str, Any] = {
     "announcement_channel": "",
     "skip_channel": "",
     "delete_on_metadata_fail": False,
+    "prevent_channel_deletions": False,
     "better_poster_enabled": False,
     "better_poster": "",
     "rpdb_enabled": False,
@@ -77,6 +78,7 @@ def _seed_from_env() -> Dict[str, Any]:
         "global_search_channels":       [],
         "http_proxy_url":               Telegram.HTTP_PROXY_URL,
         "show_proxy_and_non_proxy_both": Telegram.SHOW_PROXY_AND_NON_PROXY_BOTH,
+        "prevent_channel_deletions":    getattr(Telegram, "PREVENT_CHANNEL_DELETIONS", False),
         "multi_tokens":                 [],
         "extra_databases":              list(Telegram.DATABASE[2:]) if len(Telegram.DATABASE) > 2 else [],
     })
@@ -108,6 +110,10 @@ class Settings:
     @property
     def subscription(self) -> bool:
         return bool(self._d["subscription"])
+
+    @property
+    def prevent_channel_deletions(self) -> bool:
+        return bool(self._d.get("prevent_channel_deletions", False))
 
     @property
     def show_proxy_and_non_proxy_both(self) -> bool:

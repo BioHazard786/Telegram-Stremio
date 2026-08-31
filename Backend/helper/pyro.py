@@ -37,12 +37,19 @@ _DECORATION_PATTERN = re.compile(
 
 #----- Telegram / social-media channel tag patterns
 _CHANNEL_TAG_PATTERN = re.compile(
-    r"_@[A-Za-z]+_|@[A-Za-z]+_|[\[\]\s@]*@[^.\s\[\]]+[\]\[\s@]*"
+    r"_@[a-zA-Z0-9]+_|@[a-zA-Z0-9_]+|[\[\]\s@]*@[^.\s\[\]]+[\]\[\s@]*|\b(?:https?:\/\/)?(?:t\.me|telegram\.me)\/[a-zA-Z0-9_+\/]+",
+    flags=re.IGNORECASE,
 )
 
-_CODEC_TAG_PATTERN = re.compile(
-    r"(?<=\W)(org|AMZN|DDP|DD|NF|AAC|TVDL|5\.1|2\.1|2\.0|7\.0|7\.1|5\.0|~|\b\w+kbps\b)(?=\W)",
-    re.IGNORECASE,
+
+#----- Common channel promotion / download tags (DDL, Direct Download, GDrive, Mega, etc.)
+_PROMO_TAG_PATTERN = re.compile(
+    r"(?:[\s•·‣⁃◦⦿❖✦✧✪★☆|¦‖~_–—\-\/\[\(]+)"
+    r"(?:DDL|Direct(?:[ _-]?Download)?|Direct[ _-]?Link|GDrive|Google[ _-]?Drive|Mega|OneDrive|MediaFire|Fast[ _-]?DL|Fast[ _-]?Download|Batch|Pack|Backup|Mirror|Join|Channel|TG|Telegram)"
+    r"(?:[\s•·‣⁃◦⦿❖✦✧✪★☆|¦‖~_–—\-\/\]\)]*)$"
+    r"|"
+    r"\b(?:DDL|GDrive|FastDL|DirectDL|DirectLink)\b",
+    flags=re.IGNORECASE,
 )
 
 
@@ -112,24 +119,26 @@ def clean_filename(filename: str) -> str:
 
     #----- 1 – Strip URLs that captions sometimes prepend
     filename = remove_urls(filename)
-    
-    #----- 2 – Remove emoji sequences
+
+    #----- 2 – Remove Telegram channel tags (@ChannelName, t.me/..., etc.)
+    filename = _CHANNEL_TAG_PATTERN.sub(" ", filename)
+
+    #----- 3 – Strip channel promo tags (• DDL, Direct Download, GDrive, etc.)
+    filename = _PROMO_TAG_PATTERN.sub(" ", filename)
+
+    #----- 4 – Remove emoji sequences
     filename = _EMOJI_PATTERN.sub(" ", filename)
 
-    #----- 3 – Remove decorative unicode symbols
+    #----- 5 – Remove decorative unicode symbols (•, |, ★, etc.)
     filename = _DECORATION_PATTERN.sub(" ", filename)
 
-    #----- 4 – Replace any remaining non-ASCII characters with a space.
-    #----- Keep standard filename-safe characters: alphanumerics, . - _ ( ) [ ] ' " , : ! ? & + @
+    #----- 6 – Replace any remaining non-ASCII characters with a space.
     filename = re.sub(r"[^\x20-\x7E]", " ", filename)
 
-    #----- 5 – Remove Telegram channel tags  (@ChannelName_ etc.)
-    filename = _CHANNEL_TAG_PATTERN.sub("", filename)
+    #----- 7 – Clean any promo tags revealed after removing decorations
+    filename = _PROMO_TAG_PATTERN.sub(" ", filename)
 
-    #----- 6 – Remove codec / source tags that clutter the title region
-    filename = _CODEC_TAG_PATTERN.sub(" ", filename)
-
-    #----- 7 – Collapse multiple spaces; remove space before extension dot
+    #----- 8 – Collapse multiple spaces; remove space before extension dot
     filename = re.sub(r"\s+", " ", filename).strip().replace(" .", ".")
 
     return filename if filename else "unknown_file"
@@ -167,9 +176,13 @@ def get_readable_time(seconds: int) -> str:
 
 
 #----- Build the display filename stored for a media entry: drop URLs, emoji and
-#----- decorative symbols, strip the split-part suffix (.001), and force a video extension.
+#----- decorative symbols, strip promo tags (. DDL etc.), strip split-part suffix (.001), and force video extension.
 def finalize_media_name(title: str, is_split: bool = False) -> str:
-    title = _DECORATION_PATTERN.sub(" ", _EMOJI_PATTERN.sub(" ", remove_urls(title)))
+    title = remove_urls(title)
+    title = _CHANNEL_TAG_PATTERN.sub(" ", title)
+    title = _PROMO_TAG_PATTERN.sub(" ", title)
+    title = _DECORATION_PATTERN.sub(" ", _EMOJI_PATTERN.sub(" ", title))
+    title = _PROMO_TAG_PATTERN.sub(" ", title)
     title = re.sub(r"\s+", " ", title).strip().replace(" .", ".")
 
     ext_match = re.search(

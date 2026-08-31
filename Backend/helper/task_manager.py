@@ -114,6 +114,16 @@ async def delete_messages_batch(chat_id: int, msg_ids: List[int]):
     if not msg_ids:
         return
 
+    try:
+        from Backend.helper.settings_manager import SettingsManager
+        if SettingsManager.current().prevent_channel_deletions:
+            LOGGER.info(
+                f"[PREVENT DELETION] Prevent Channel Deletions is active: skipped deleting {len(msg_ids)} message(s) in {chat_id}"
+            )
+            return
+    except Exception:
+        pass
+
     for i in range(0, len(msg_ids), DELETE_BATCH_SIZE):
         chunk = msg_ids[i:i + DELETE_BATCH_SIZE]
 

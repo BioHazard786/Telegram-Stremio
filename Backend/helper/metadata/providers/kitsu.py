@@ -150,16 +150,17 @@ async def search_anime(title: str, season: Optional[int] = None, movie: bool = F
     return await cached_call(KITSU_CACHE, cache_key, "kitsu_search", _produce)
 
 
-async def get_anizip_mappings(kitsu_id: int) -> Optional[dict]:
-    cache_key = f"anizip::{kitsu_id}"
+async def get_anizip_mappings(id_val: int | str) -> Optional[dict]:
+    cache_key = f"anizip::{id_val}"
 
     async def _produce():
         try:
             client = await _get_client()
-            resp = await client.get(ANIZIP_URL, params={"kitsu_id": kitsu_id})
+            param = {"imdb_id": str(id_val)} if str(id_val).startswith("tt") else {"kitsu_id": id_val}
+            resp = await client.get(ANIZIP_URL, params=param)
             return resp.json() if resp.status_code == 200 else None
         except Exception as e:
-            LOGGER.warning(f"[KITSU] ani.zip mappings failed for {kitsu_id}: {e}")
+            LOGGER.warning(f"[KITSU] ani.zip mappings failed for {id_val}: {e}")
             return None
 
     return await cached_call(KITSU_CACHE, cache_key, "anizip", _produce)

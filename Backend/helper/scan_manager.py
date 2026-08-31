@@ -462,7 +462,8 @@ class ScanManager:
             return
 
         file = message.video or message.document
-        title = message.caption or file.file_name
+        caption = (message.caption or "").strip()
+        file_name = (getattr(file, "file_name", None) or "").strip()
         msg_id = message.id
         raw_size = file.file_size
         size = get_readable_file_size(file.file_size)
@@ -475,14 +476,38 @@ class ScanManager:
         except Exception as e:
             LOGGER.warning(f"[ScanManager] Dup-check error msg {msg_id}: {e}")
 
-        try:
-            metadata_info = await metadata(
-                clean_filename(title), channel_int, msg_id,
-                override_id=extract_default_id(message.caption or ""),
-            )
-        except Exception as e:
-            LOGGER.warning(f"[ScanManager] Metadata exception for msg {msg_id}: {e}")
-            metadata_info = None
+        metadata_info = None
+        chosen_title = caption or file_name or "video.mkv"
+
+        # 1. Try caption first
+        if caption:
+            try:
+                metadata_info = await metadata(
+                    clean_filename(caption),
+                    channel_int,
+                    msg_id,
+                    override_id=extract_default_id(caption),
+                )
+                if metadata_info is not None:
+                    chosen_title = caption
+            except Exception as e:
+                LOGGER.warning(f"[ScanManager] Caption metadata exception for msg {msg_id}: {e}")
+                metadata_info = None
+
+        # 2. Fall back to file name / title
+        if metadata_info is None and file_name and file_name != caption:
+            try:
+                metadata_info = await metadata(
+                    clean_filename(file_name),
+                    channel_int,
+                    msg_id,
+                    override_id=extract_default_id(caption or file_name),
+                )
+                if metadata_info is not None:
+                    chosen_title = file_name
+            except Exception as e:
+                LOGGER.warning(f"[ScanManager] Filename metadata exception for msg {msg_id}: {e}")
+                metadata_info = None
 
         if metadata_info is None:
             s["counters"]["skipped_meta"] += 1
@@ -492,7 +517,7 @@ class ScanManager:
                 LOGGER.warning(f"[ScanManager] Skip-channel route failed for msg {msg_id}: {e}")
             return
 
-        title_clean = finalize_media_name(title, bool(metadata_info.get('group_key')))
+        title_clean = finalize_media_name(chosen_title, bool(metadata_info.get('group_key')))
 
         insert_status: dict = {}
         try:

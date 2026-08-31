@@ -1,14 +1,14 @@
 services:
   telegram-stremio:
     build: .
-    container_name: tg_stremio  
+    container_name: tg_stremio
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
     volumes:
       - ./config.env:/app/config.env
     restart: unless-stopped
     logging:
       driver: "json-file"
       options:
-        max-size: "1m"     
-        max-file: "3"      
+        max-size: "1m"
+        max-file: "3"

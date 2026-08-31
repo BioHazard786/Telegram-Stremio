@@ -1,3 +1,4 @@
+from typing import Optional
 from asyncio import Lock, Queue, create_task
 from asyncio import sleep as asleep
 
@@ -27,7 +28,7 @@ db_lock = Lock()
 manual_session_lock = Lock()
 
 
-#----- True when the message carries a streamable video or a split-archive part
+# ----- True when the message carries a streamable video or a split-archive part
 def _is_supported_media(message: Message) -> bool:
     if message.video:
         return True
@@ -45,13 +46,13 @@ def _is_supported_media(message: Message) -> bool:
     return False
 
 
-#----- True when a chat id belongs to a manual channel (files added by hand, not auto-indexed)
+# ----- True when a chat id belongs to a manual channel (files added by hand, not auto-indexed)
 def _is_manual_channel(chat_id) -> bool:
     target = str(chat_id).replace("-100", "")
     return any(str(c).strip().replace("-100", "") == target for c in SettingsManager.current().manual_channels)
 
 
-#----- Common message field extraction shared by the channel handlers
+# ----- Common message field extraction shared by the channel handlers
 def _extract_fields(message: Message):
     file = message.video or message.document
     title = message.caption or file.file_name
@@ -59,12 +60,12 @@ def _extract_fields(message: Message):
     return file, title, message.id, file.file_size, get_readable_file_size(file.file_size), channel
 
 
-#----- Strip URLs/part suffix from a title and ensure a video extension
+# ----- Strip URLs/part suffix from a title and ensure a video extension
 def _finalize_title(title: str, metadata_info: dict) -> str:
     return finalize_media_name(title, bool(metadata_info.get('group_key')))
 
 
-#----- Serialize DB inserts from the queue and trigger catalog sync
+# ----- Serialize DB inserts from the queue and trigger catalog sync
 async def process_file():
     while True:
         metadata_info, channel, msg_id, size, raw_size, title = await file_queue.get()
@@ -72,12 +73,14 @@ async def process_file():
         async with db_lock:
             updated_id = await db.insert_media(metadata_info, channel=channel, msg_id=msg_id, size=size, raw_size=raw_size, name=title, status=insert_status)
             if updated_id:
-                LOGGER.info(f"{metadata_info['media_type']} updated with ID: {updated_id}")
+                LOGGER.info(
+                    f"{metadata_info['media_type']} updated with ID: {updated_id}")
             else:
                 LOGGER.info("Update failed due to validation errors.")
 
         if updated_id and insert_status.get("duplicate_skipped"):
-            LOGGER.info(f"Duplicate protection: deleting duplicate message {msg_id} from channel {channel}.")
+            LOGGER.info(
+                f"Duplicate protection: deleting duplicate message {msg_id} from channel {channel}.")
             create_task(delete_message(int(f"-100{channel}"), msg_id))
             file_queue.task_done()
             continue
@@ -100,7 +103,7 @@ async def process_file():
 create_task(process_file())
 
 
-#----- Build a title-level metadata base from an existing media document
+# ----- Build a title-level metadata base from an existing media document
 def _base_from_doc(doc: dict) -> dict:
     return {
         "tmdb_id": doc.get("tmdb_id"),
@@ -120,11 +123,12 @@ def _base_from_doc(doc: dict) -> dict:
     }
 
 
-#----- Highest existing episode number in a season, or 0 if none
+# ----- Highest existing episode number in a season, or 0 if none
 def _max_episode(doc: dict, season_number: int) -> int:
     for season in doc.get("seasons", []) or []:
         if season.get("season_number") == season_number:
-            eps = [e.get("episode_number", 0) for e in season.get("episodes", []) or []]
+            eps = [e.get("episode_number", 0)
+                   for e in season.get("episodes", []) or []]
             return max(eps) if eps else 0
     return 0
 
@@ -138,14 +142,16 @@ async def _handle_personal_session(client: Client, message: Message) -> None:
         try:
             resolved = await resolve_telegram_message(client, chat_id=channel, msg_id=message.id)
         except Exception as e:
-            LOGGER.warning(f"[Manual Session] Could not resolve message {message.id}: {e}")
+            LOGGER.warning(
+                f"[Manual Session] Could not resolve message {message.id}: {e}")
             return
 
         tmdb_id = session["tmdb_id"]
         media_type = session["media_type"]
         location = await db.find_media_doc(media_type, tmdb_id)
         if not location:
-            LOGGER.warning(f"[Manual Session] Target id {tmdb_id} not found; ignoring file.")
+            LOGGER.warning(
+                f"[Manual Session] Target id {tmdb_id} not found; ignoring file.")
             return
         doc = location[0]
 
@@ -186,19 +192,22 @@ async def _handle_personal_session(client: Client, message: Message) -> None:
         async with db_lock:
             updated_id = await db.insert_media(
                 metadata_info, channel=p_channel, msg_id=p_msg,
-                size=resolved["size"], name=name, raw_size=int(resolved.get("raw_size") or 0),
+                size=resolved["size"], name=name, raw_size=int(
+                    resolved.get("raw_size") or 0),
             )
 
         if updated_id:
             where = (f"S{metadata_info['season_number']:02d}E{metadata_info['episode_number']:02d} "
                      if media_type == "tv" else "")
-            LOGGER.info(f"[Manual Session] Added {quality} {where}to '{metadata_info.get('title')}' (id {tmdb_id}).")
+            LOGGER.info(
+                f"[Manual Session] Added {quality} {where}to '{metadata_info.get('title')}' (id {tmdb_id}).")
             create_task(stamp_caption_with_id(message, metadata_info))
         else:
-            LOGGER.warning(f"[Manual Session] Insert failed for message {message.id}.")
+            LOGGER.warning(
+                f"[Manual Session] Insert failed for message {message.id}.")
 
 
-#----- Ingest new channel media into the queue after building metadata
+# ----- Ingest new channel media into the queue after building metadata
 @Client.on_message(filters.channel & (filters.document | filters.video))
 async def file_receive_handler(client: Client, message: Message):
     if is_skip_channel(message):
@@ -207,13 +216,13 @@ async def file_receive_handler(client: Client, message: Message):
     session = Backend.MANUAL_SESSION
     is_manual = _is_manual_channel(message.chat.id)
 
-    #----- Manual channel + personal session: add straight onto the personal title
+    # ----- Manual channel + personal session: add straight onto the personal title
     if is_manual and session and session.get("kind") == "personal":
         await _handle_personal_session(client, message)
         return
 
-    #----- Manual channel otherwise only proceeds during a real (TMDB/IMDb) session;
-    #----- real files are parsed from their name/caption and forced onto the session id.
+    # ----- Manual channel otherwise only proceeds during a real (TMDB/IMDb) session;
+    # ----- real files are parsed from their name/caption and forced onto the session id.
     if is_manual:
         if not (session and session.get("kind") == "real"):
             return
@@ -225,7 +234,8 @@ async def file_receive_handler(client: Client, message: Message):
     override_id = session["default_id"] if is_real_session else None
     season_hint = session.get("season") if is_real_session else None
     try:
-        sub_name = (message.document.file_name if message.document else "") or ""
+        sub_name = (
+            message.document.file_name if message.document else "") or ""
         if sub_name and is_subtitle_file(sub_name):
             channel = str(message.chat.id).replace("-100", "")
             create_task(ingest_subtitle(sub_name, int(channel), message.id))
@@ -235,15 +245,24 @@ async def file_receive_handler(client: Client, message: Message):
             await message.reply_text("> Not supported")
             return
 
-        _, title, msg_id, raw_size, size, channel = _extract_fields(message)
+        file, _, msg_id, raw_size, size, channel = _extract_fields(message)
 
-        metadata_info = await metadata(clean_filename(title), int(channel), msg_id, override_id=override_id or extract_default_id(message.caption or ""), season_hint=season_hint)
+        metadata_info, chosen_title = await _resolve_media_metadata(
+            message,
+            file,
+            int(channel),
+            msg_id,
+            override_id=override_id or extract_default_id(
+                message.caption or ""),
+            season_hint=season_hint,
+        )
         if metadata_info is None:
-            LOGGER.warning(f"Metadata failed for file: {title} (ID: {msg_id})")
+            LOGGER.warning(
+                f"Metadata failed for file: {chosen_title} (ID: {msg_id})")
             await route_to_skip_channel(client, message)
             return
 
-        title = _finalize_title(title, metadata_info)
+        title = _finalize_title(chosen_title, metadata_info)
 
         await file_queue.put((metadata_info, int(channel), msg_id, size, raw_size, title))
 
@@ -268,7 +287,49 @@ def _override_matches_indexed(override_id: str, imdb_id, tmdb_id) -> bool:
     return False
 
 
-#----- Re-index an edited channel file only when it carries an override ID
+# ----- Resolve metadata by checking caption first, then falling back to filename/title
+async def _resolve_media_metadata(
+    message: Message,
+    file,
+    channel: int,
+    msg_id: int,
+    override_id: Optional[str] = None,
+    season_hint: Optional[int] = None,
+) -> tuple[Optional[dict], str]:
+    caption = (message.caption or "").strip()
+    file_name = (getattr(file, "file_name", None) or "").strip()
+
+    # 1. Try caption first
+    if caption:
+        cleaned_caption = clean_filename(caption)
+        meta = await metadata(
+            cleaned_caption,
+            channel,
+            msg_id,
+            override_id=override_id or extract_default_id(caption),
+            season_hint=season_hint,
+        )
+        if meta is not None:
+            return meta, caption
+
+    # 2. Fall back to file name / title
+    if file_name and file_name != caption:
+        cleaned_fn = clean_filename(file_name)
+        meta = await metadata(
+            cleaned_fn,
+            channel,
+            msg_id,
+            override_id=override_id or extract_default_id(
+                caption or file_name),
+            season_hint=season_hint,
+        )
+        if meta is not None:
+            return meta, file_name
+
+    return None, caption or file_name or "video.mkv"
+
+
+# ----- Re-index an edited channel file only when it carries an override ID
 @Client.on_edited_message(filters.channel & (filters.document | filters.video))
 async def file_edited_handler(client: Client, message: Message):
     if str(message.chat.id) not in SettingsManager.current().auth_channels:
@@ -277,8 +338,9 @@ async def file_edited_handler(client: Client, message: Message):
         if not _is_supported_media(message):
             return
 
-        _, title, msg_id, raw_size, size, channel = _extract_fields(message)
-        override_id = extract_default_id(message.caption) if message.caption else None
+        file, _, msg_id, raw_size, size, channel = _extract_fields(message)
+        override_id = extract_default_id(
+            message.caption) if message.caption else None
         if not override_id:
             return
 
@@ -286,21 +348,25 @@ async def file_edited_handler(client: Client, message: Message):
         if existing_ids and _override_matches_indexed(override_id, existing_ids[0], existing_ids[1]):
             return
 
-        LOGGER.info(f"Detected override ID '{override_id}' in edited message {msg_id}")
+        LOGGER.info(
+            f"Detected override ID '{override_id}' in edited message {msg_id}")
         await db.remove_media_part(int(channel), msg_id)
 
-        metadata_info = await metadata(clean_filename(title), int(channel), msg_id, override_id=override_id)
+        metadata_info, chosen_title = await _resolve_media_metadata(
+            message, file, int(channel), msg_id, override_id=override_id
+        )
         if metadata_info is None:
-            LOGGER.warning(f"Metadata failed for edited file: {title} (ID: {msg_id})")
+            LOGGER.warning(
+                f"Metadata failed for edited file: {chosen_title} (ID: {msg_id})")
             return
 
-        title = _finalize_title(title, metadata_info)
+        title = _finalize_title(chosen_title, metadata_info)
         await file_queue.put((metadata_info, int(channel), msg_id, size, raw_size, title))
     except Exception as e:
         LOGGER.error(f"Error handling edited generic file {message.id}: {e}")
 
 
-#----- Purge database entries for messages deleted from auth channels
+# ----- Purge database entries for messages deleted from auth channels
 @Client.on_deleted_messages(filters.channel)
 async def file_deleted_handler(client: Client, messages: list[Message]):
     try:
@@ -313,9 +379,11 @@ async def file_deleted_handler(client: Client, messages: list[Message]):
             msg_id = message.id
             try:
                 if await db.remove_media_part(int(channel), msg_id):
-                    LOGGER.info(f"Automatically purged deleted message {msg_id} from database.")
+                    LOGGER.info(
+                        f"Automatically purged deleted message {msg_id} from database.")
                 if await remove_subtitle(int(channel), msg_id):
-                    LOGGER.info(f"Automatically purged deleted subtitle {msg_id} from database.")
+                    LOGGER.info(
+                        f"Automatically purged deleted subtitle {msg_id} from database.")
             except Exception as ex:
                 LOGGER.error(f"Failed to scrub deleted message {msg_id}: {ex}")
     except Exception as e:

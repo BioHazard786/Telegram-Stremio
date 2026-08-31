@@ -266,6 +266,17 @@
                     </span>
                 </span>
             </label>
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="prevent_channel_deletions"
+                    {% if settings.prevent_channel_deletions %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>Prevent Channel Deletions</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Never delete media messages from Telegram channels (guards channels against any file deletions)
+                    </span>
+                </span>
+            </label>
         </div>
     </div>
 
@@ -1522,6 +1533,7 @@ async function saveSettings() {
         announcement_channel:          (function(){const el=document.getElementById('announcement_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         skip_channel:                  (function(){const el=document.getElementById('skip_channel');return el.dataset.id||extractChannelId(el.value.trim());})(),
         delete_on_metadata_fail:       document.getElementById('delete_on_metadata_fail').checked,
+        prevent_channel_deletions:     document.getElementById('prevent_channel_deletions').checked,
     };
 
     try {
@@ -1623,6 +1635,7 @@ function renderSettings(s) {
     document.getElementById('duplicate_protection').checked = !!s.duplicate_protection;
     toggleDuplicateProtection();
     document.getElementById('hide_catalog').checked = !!s.hide_catalog;
+    document.getElementById('prevent_channel_deletions').checked = !!s.prevent_channel_deletions;
     document.getElementById('subscription').checked = !!s.subscription;
     document.getElementById('show_proxy_and_non_proxy_both').checked = !!s.show_proxy_and_non_proxy_both;
     document.getElementById('global_search').checked = !!s.global_search;

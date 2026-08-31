@@ -42,6 +42,7 @@ class Telegram:
     APPROVER_IDS                  = [int(x.strip()) for x in (getenv("APPROVER_IDS") or "").split(",") if x.strip().isdigit()]
     HTTP_PROXY_URL                = getenv("HTTP_Proxy_URL", "")
     SHOW_PROXY_AND_NON_PROXY_BOTH = getenv("SHOW_ProxyAndNonProxyBoth", "false").lower() == "true"
+    PREVENT_CHANNEL_DELETIONS     = getenv("PREVENT_CHANNEL_DELETIONS", "false").lower() == "true" or getenv("DISABLE_CHANNEL_DELETE", "false").lower() == "true"
 
     #----- WebDAV (optional env fallback; prefer Settings page)
     WEBDAV_USER     = getenv("WEBDAV_USER", "")
