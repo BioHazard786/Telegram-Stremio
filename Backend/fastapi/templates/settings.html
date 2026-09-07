@@ -1051,6 +1051,25 @@ document.addEventListener('DOMContentLoaded', sessLoadStatus);
                 </div>
             </div>
         </div>
+        <div style="margin-top:1rem;margin-bottom:1.25rem">
+            <label class="toggle-wrap">
+                <input type="checkbox" class="toggle-input" id="webdav_preload"
+                    {% if settings.webdav_preload %}checked{% endif %}>
+                <span class="toggle-track"></span>
+                <span class="toggle-label">
+                    <strong>Pre-build WebDAV Index</strong>
+                    <span style="color:var(--text-sec);font-size:0.8rem;display:block">
+                        Warm up the virtual movies and TV shows index in the background on startup so Infuse connections are instantaneous.
+                    </span>
+                </span>
+            </label>
+        </div>
+        <div style="margin-bottom:1rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+            <button type="button" class="btn btn-secondary" onclick="rebuildWebdavIndex()" id="btn-rebuild-webdav" style="font-size:0.82rem;padding:0.45rem 0.9rem">
+                <i class="fa-solid fa-arrows-rotate" id="webdav-rebuild-spinner"></i> Rebuild Index Now
+            </button>
+            <span id="webdav-rebuild-status" style="font-size:0.82rem;color:var(--text-sec)"></span>
+        </div>
         <p style="font-size:0.78rem;color:var(--text-sec)">
             <i class="fa-solid fa-circle-info"></i>
             Movies: <code>/webdav/TOKEN/Movies/</code> ·
@@ -1457,6 +1476,45 @@ function toggleWebdavPwdVisibility() {
     }
 }
 
+async function rebuildWebdavIndex() {
+    const btn = document.getElementById('btn-rebuild-webdav');
+    const spinner = document.getElementById('webdav-rebuild-spinner');
+    const status = document.getElementById('webdav-rebuild-status');
+    if (btn) btn.disabled = true;
+    if (spinner) spinner.classList.add('fa-spin');
+    if (status) {
+        status.textContent = 'Rebuilding index in background…';
+        status.style.color = 'var(--primary)';
+    }
+
+    try {
+        const res = await fetch('/api/admin/webdav/rebuild', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(data.message || 'WebDAV index rebuilt successfully!', 'success');
+            if (status) {
+                status.textContent = `✓ Indexed ${data.movies_count ?? 0} movies, ${data.shows_count ?? 0} TV shows`;
+                status.style.color = 'var(--success, #10b981)';
+            }
+        } else {
+            showToast(data.detail || 'Failed to rebuild WebDAV index', 'error');
+            if (status) {
+                status.textContent = 'Rebuild failed';
+                status.style.color = 'var(--danger, #ef4444)';
+            }
+        }
+    } catch (e) {
+        showToast('Network error while rebuilding WebDAV index', 'error');
+        if (status) {
+            status.textContent = 'Error: ' + e.message;
+            status.style.color = 'var(--danger, #ef4444)';
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+        if (spinner) spinner.classList.remove('fa-spin');
+    }
+}
+
 async function saveSettings() {
     const btn   = document.getElementById('save-btn');
     const label = document.getElementById('save-label');
@@ -1524,6 +1582,7 @@ async function saveSettings() {
         mediaflow_password:            document.getElementById('mediaflow_password').value,
         webdav_user:                   document.getElementById('webdav_user').value.trim(),
         webdav_password:               document.getElementById('webdav_password').value,
+        webdav_preload:                document.getElementById('webdav_preload').checked,
         multi_tokens:                  collectList('multi_tokens'),
         extra_databases:               collectList('extra_databases'),
         global_search:                 document.getElementById('global_search').checked,
@@ -1672,6 +1731,8 @@ function renderSettings(s) {
     if (wu) wu.value = s.webdav_user || '';
     const wp = document.getElementById('webdav_password');
     if (wp) wp.value = s.webdav_password || '';
+    const wpre = document.getElementById('webdav_preload');
+    if (wpre) wpre.checked = !!s.webdav_preload;
     toggleMediaflowFields();
 
     const titles = s.channel_titles || {};

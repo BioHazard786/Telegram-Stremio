@@ -81,6 +81,11 @@ async def start_services():
 
         await subscription_task_manager.sync(StreamBot)
 
+        if SettingsManager.current().webdav_preload:
+            from Backend.helper.webdav_fs import fs
+            LOGGER.info("[WebDAV] Pre-building virtual filesystem index in background...")
+            loop.create_task(fs.ensure_tree())
+
         LOGGER.info("Telegram-Stremio Started Successfully!")
         await idle()
     except Exception:

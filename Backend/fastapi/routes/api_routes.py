@@ -1780,6 +1780,7 @@ async def update_settings_api(payload: dict) -> dict:
         "fanart_enabled",
         "fanart_shuffle",
         "fanart_low_res_poster",
+        "webdav_preload",
     }
     for key in bool_keys:
         if key in payload:
@@ -1938,6 +1939,10 @@ async def update_settings_api(payload: dict) -> dict:
 
     try:
         reinit_results = await SettingsManager.update(db, payload)
+        if payload.get("webdav_preload"):
+            import asyncio
+            from Backend.helper.webdav_fs import fs
+            asyncio.create_task(fs.ensure_tree())
         return {
             "message": "Settings saved successfully.",
             "reinit": reinit_results,

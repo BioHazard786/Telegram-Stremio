@@ -20,8 +20,10 @@ Layout (stable paths):
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -130,234 +132,525 @@ class VNode:
     children: Dict[str, "VNode"] = field(default_factory=dict)
 
 
+@dataclass
+class MediaIndexEntry:
+    folder_name: str
+    db_index: int
+    doc_id: str
+    tmdb_id: Optional[int] = None
+    mtime: float = field(default_factory=time.time)
+    vnode: Optional[VNode] = None
+
+
 class WebDAVFilesystem:
     """
-    Builds and caches a virtual tree from all storage databases.
-    Cache TTL defaults to 5 minutes.
+    High-performance virtual filesystem for WebDAV backed by Telegram-Stremio MongoDB.
+
+    Architected for large libraries (10k+ movies, 50k+ episodes):
+      1. Root (/) and Categories (/Movies, /TV Shows) resolve instantly with 0 DB overhead.
+      2. Category directory listings query MongoDB using minimal field projections
+         (title, year, tmdb_id), avoiding heavy document transfers.
+      3. Folder contents (episodes, video qualities, NFOs) are generated lazily
+         on-demand when the specific folder is accessed, and cached in an LRU.
+      4. Concurrency lock prevents duplicate database scans (thundering herd).
+      5. Periodic event loop yields prevent blocking other FastAPI requests.
     """
 
-    def __init__(self, cache_ttl: int = 300):
+    def __init__(self, cache_ttl: int = 900, folder_lru_size: int = 500):
         self.cache_ttl = cache_ttl
-        self._root: Optional[VNode] = None
-        self._built_at: float = 0.0
-        self._building = False
+        self.folder_lru_size = folder_lru_size
+
+        self._lock = asyncio.Lock()
+        self._movies_index: Dict[str, MediaIndexEntry] = {}  # lower_folder -> MediaIndexEntry
+        self._shows_index: Dict[str, MediaIndexEntry] = {}   # lower_folder -> MediaIndexEntry
+        self._movies_built_at: float = 0.0
+        self._shows_built_at: float = 0.0
+
+        # LRU cache for folder children: path -> Dict[name_lower, VNode]
+        self._folder_cache: OrderedDict[str, Dict[str, VNode]] = OrderedDict()
+
+        # Root and top-level static VNodes
+        self._root_node = VNode(path="/", name="", is_dir=True)
+        self._movies_node = VNode(path="/Movies", name="Movies", is_dir=True)
+        self._shows_node = VNode(path="/TV Shows", name="TV Shows", is_dir=True)
 
     def invalidate(self) -> None:
-        self._built_at = 0.0
-        self._root = None
+        self._movies_built_at = 0.0
+        self._shows_built_at = 0.0
+        self._movies_index.clear()
+        self._shows_index.clear()
+        self._folder_cache.clear()
 
     async def ensure_tree(self) -> VNode:
+        """Warm up movies and shows indexes."""
+        await self._get_movies_index()
+        await self._get_shows_index()
+        return self._root_node
+
+    def _cache_folder(self, path: str, children: Dict[str, VNode]) -> None:
+        self._folder_cache[path] = children
+        self._folder_cache.move_to_end(path)
+        if len(self._folder_cache) > self.folder_lru_size:
+            self._folder_cache.popitem(last=False)
+
+    async def _get_movies_index(self) -> Dict[str, MediaIndexEntry]:
         now = time.time()
-        if self._root is not None and (now - self._built_at) < self.cache_ttl:
-            return self._root
-        if self._building:
-            # another coroutine is building; wait briefly for it
-            for _ in range(50):
-                await _async_sleep(0.1)
-                if self._root is not None and (time.time() - self._built_at) < self.cache_ttl:
-                    return self._root
-        self._building = True
-        try:
-            root = await self._build_tree()
-            self._root = root
-            self._built_at = time.time()
-            return root
-        finally:
-            self._building = False
+        if self._movies_index and (now - self._movies_built_at) < self.cache_ttl:
+            return self._movies_index
 
-    async def resolve(self, path: str) -> Optional[VNode]:
-        root = await self.ensure_tree()
-        path = normalize_path(path)
-        if path in ("", "/"):
-            return root
-        parts = [p for p in path.strip("/").split("/") if p]
-        node = root
-        for part in parts:
-            if not node.is_dir:
-                return None
-            child = node.children.get(part)
-            if child is None:
-                # case-insensitive fallback
-                lower = part.lower()
-                child = next((c for n, c in node.children.items() if n.lower() == lower), None)
-            if child is None:
-                return None
-            node = child
-        return node
+        async with self._lock:
+            if self._movies_index and (time.time() - self._movies_built_at) < self.cache_ttl:
+                return self._movies_index
 
-    async def list_dir(self, path: str) -> List[VNode]:
-        node = await self.resolve(path)
-        if node is None or not node.is_dir:
-            return []
-        return list(node.children.values())
+            LOGGER.info("[WebDAV] Indexing movies…")
+            index: Dict[str, MediaIndexEntry] = {}
+            storage_keys = sorted(
+                [k for k in db.dbs.keys() if k.startswith("storage_")],
+                key=lambda k: int(k.split("_")[1]),
+            )
+            count = 0
+            for db_key in storage_keys:
+                storage = db.dbs[db_key]
+                try:
+                    db_index = int(db_key.split("_")[1])
+                except ValueError:
+                    continue
 
-    async def _build_tree(self) -> VNode:
-        LOGGER.info("[WebDAV] Building virtual filesystem tree…")
-        root = VNode(path="/", name="", is_dir=True)
-        movies_dir = VNode(path="/Movies", name="Movies", is_dir=True)
-        shows_dir = VNode(path="/TV Shows", name="TV Shows", is_dir=True)
-        root.children["Movies"] = movies_dir
-        root.children["TV Shows"] = shows_dir
-
-        movie_count = 0
-        show_count = 0
-
-        # walk every storage DB
-        storage_keys = sorted(
-            [k for k in db.dbs.keys() if k.startswith("storage_")],
-            key=lambda k: int(k.split("_")[1]),
-        )
-        for db_key in storage_keys:
-            storage = db.dbs[db_key]
-            try:
-                db_index = int(db_key.split("_")[1])
-            except ValueError:
-                continue
-
-            #----- Movies
-            try:
-                cursor = storage["movie"].find({})
-                async for doc in cursor:
-                    doc = _oid_str(doc)
-                    doc.setdefault("db_index", db_index)
-                    folder = movie_folder_name(doc)
-                    # avoid collisions
-                    base_folder = folder
-                    n = 2
-                    while folder in movies_dir.children:
-                        folder = f"{base_folder} [{n}]"
-                        n += 1
-                    folder_path = f"/Movies/{folder}"
-                    fnode = VNode(path=folder_path, name=folder, is_dir=True,
-                                  media_type="movie", tmdb_id=doc.get("tmdb_id"), db_index=db_index)
-                    movies_dir.children[folder] = fnode
-
-                    # NFO
-                    nfo_name = f"{folder}.nfo"
-                    nfo_bytes = movie_nfo(doc).encode("utf-8")
-                    fnode.children[nfo_name] = VNode(
-                        path=f"{folder_path}/{nfo_name}",
-                        name=nfo_name,
-                        is_dir=False,
-                        size=len(nfo_bytes),
-                        content_type="text/xml; charset=utf-8",
-                        kind="movie_nfo",
-                        nfo_body=nfo_bytes,
-                        media_type="movie",
-                        tmdb_id=doc.get("tmdb_id"),
-                        db_index=db_index,
+                try:
+                    # Projection: only fetch essential fields to keep payload tiny
+                    cursor = storage["movie"].find(
+                        {},
+                        {
+                            "_id": 1,
+                            "title": 1,
+                            "title_english": 1,
+                            "release_year": 1,
+                            "tmdb_id": 1,
+                            "updated_at": 1,
+                        },
                     )
+                    async for doc in cursor:
+                        doc_id = str(doc.get("_id"))
+                        folder = movie_folder_name(doc)
+                        base_folder = folder
+                        n = 2
+                        while folder.lower() in index:
+                            folder = f"{base_folder} [{n}]"
+                            n += 1
 
-                    qualities = doc.get("telegram") or []
-                    q = pick_best_quality(qualities)
-                    # also expose every quality as separate file
-                    for qual in qualities:
-                        video_node = self._movie_video_node(folder_path, folder, doc, qual)
-                        if video_node and video_node.name not in fnode.children:
-                            fnode.children[video_node.name] = video_node
-                    if not qualities and q is None:
-                        pass
-                    movie_count += 1
-            except Exception as e:
-                LOGGER.warning("[WebDAV] movie scan failed on %s: %s", db_key, e)
+                        folder_path = f"/Movies/{folder}"
+                        tmdb_id = doc.get("tmdb_id")
+                        vnode = VNode(
+                            path=folder_path,
+                            name=folder,
+                            is_dir=True,
+                            media_type="movie",
+                            tmdb_id=tmdb_id,
+                            db_index=db_index,
+                        )
+                        entry = MediaIndexEntry(
+                            folder_name=folder,
+                            db_index=db_index,
+                            doc_id=doc_id,
+                            tmdb_id=tmdb_id,
+                            vnode=vnode,
+                        )
+                        index[folder.lower()] = entry
+                        count += 1
+                        if count % 250 == 0:
+                            await asyncio.sleep(0)  # Yield to event loop
+                except Exception as e:
+                    LOGGER.warning("[WebDAV] movie scan failed on %s: %s", db_key, e)
 
-            #----- TV Shows
-            try:
-                cursor = storage["tv"].find({})
-                async for doc in cursor:
-                    doc = _oid_str(doc)
-                    doc.setdefault("db_index", db_index)
-                    folder = show_folder_name(doc)
-                    base_folder = folder
-                    n = 2
-                    while folder in shows_dir.children:
-                        folder = f"{base_folder} [{n}]"
-                        n += 1
-                    folder_path = f"/TV Shows/{folder}"
-                    snode = VNode(path=folder_path, name=folder, is_dir=True,
-                                  media_type="tv", tmdb_id=doc.get("tmdb_id"), db_index=db_index)
-                    shows_dir.children[folder] = snode
+            self._movies_index = index
+            self._movies_built_at = time.time()
+            LOGGER.info("[WebDAV] Indexed %s movies", count)
+            return self._movies_index
 
-                    # tvshow.nfo
-                    nfo_bytes = tvshow_nfo(doc).encode("utf-8")
-                    snode.children["tvshow.nfo"] = VNode(
-                        path=f"{folder_path}/tvshow.nfo",
-                        name="tvshow.nfo",
-                        is_dir=False,
-                        size=len(nfo_bytes),
-                        content_type="text/xml; charset=utf-8",
-                        kind="show_nfo",
-                        nfo_body=nfo_bytes,
-                        media_type="tv",
-                        tmdb_id=doc.get("tmdb_id"),
-                        db_index=db_index,
+    async def _get_shows_index(self) -> Dict[str, MediaIndexEntry]:
+        now = time.time()
+        if self._shows_index and (now - self._shows_built_at) < self.cache_ttl:
+            return self._shows_index
+
+        async with self._lock:
+            if self._shows_index and (time.time() - self._shows_built_at) < self.cache_ttl:
+                return self._shows_index
+
+            LOGGER.info("[WebDAV] Indexing TV shows…")
+            index: Dict[str, MediaIndexEntry] = {}
+            storage_keys = sorted(
+                [k for k in db.dbs.keys() if k.startswith("storage_")],
+                key=lambda k: int(k.split("_")[1]),
+            )
+            count = 0
+            for db_key in storage_keys:
+                storage = db.dbs[db_key]
+                try:
+                    db_index = int(db_key.split("_")[1])
+                except ValueError:
+                    continue
+
+                try:
+                    cursor = storage["tv"].find(
+                        {},
+                        {
+                            "_id": 1,
+                            "title": 1,
+                            "title_english": 1,
+                            "release_year": 1,
+                            "tmdb_id": 1,
+                            "updated_at": 1,
+                        },
                     )
+                    async for doc in cursor:
+                        doc_id = str(doc.get("_id"))
+                        folder = show_folder_name(doc)
+                        base_folder = folder
+                        n = 2
+                        while folder.lower() in index:
+                            folder = f"{base_folder} [{n}]"
+                            n += 1
 
-                    for season in doc.get("seasons") or []:
-                        sn = int(season.get("season_number") or 0)
-                        season_name = f"Season {sn:02d}"
-                        season_path = f"{folder_path}/{season_name}"
-                        season_node = VNode(
-                            path=season_path,
-                            name=season_name,
+                        folder_path = f"/TV Shows/{folder}"
+                        tmdb_id = doc.get("tmdb_id")
+                        vnode = VNode(
+                            path=folder_path,
+                            name=folder,
                             is_dir=True,
                             media_type="tv",
-                            tmdb_id=doc.get("tmdb_id"),
+                            tmdb_id=tmdb_id,
                             db_index=db_index,
-                            season_number=sn,
                         )
-                        snode.children[season_name] = season_node
-
-                        # season.nfo
-                        snfo = season_nfo(doc, sn).encode("utf-8")
-                        season_node.children["season.nfo"] = VNode(
-                            path=f"{season_path}/season.nfo",
-                            name="season.nfo",
-                            is_dir=False,
-                            size=len(snfo),
-                            content_type="text/xml; charset=utf-8",
-                            kind="season_nfo",
-                            nfo_body=snfo,
-                            media_type="tv",
-                            tmdb_id=doc.get("tmdb_id"),
+                        entry = MediaIndexEntry(
+                            folder_name=folder,
                             db_index=db_index,
-                            season_number=sn,
+                            doc_id=doc_id,
+                            tmdb_id=tmdb_id,
+                            vnode=vnode,
                         )
+                        index[folder.lower()] = entry
+                        count += 1
+                        if count % 250 == 0:
+                            await asyncio.sleep(0)  # Yield to event loop
+                except Exception as e:
+                    LOGGER.warning("[WebDAV] tv scan failed on %s: %s", db_key, e)
 
-                        for ep in season.get("episodes") or []:
-                            en = int(ep.get("episode_number") or 0)
-                            ep_title = safe_name(ep.get("title") or f"Episode {en}", 80)
-                            show_short = safe_name(doc.get("title_english") or doc.get("title") or "Show", 60)
-                            qualities = ep.get("telegram") or []
-                            for qual in qualities:
-                                vnode = self._episode_video_node(
-                                    season_path, show_short, sn, en, ep_title, doc, ep, qual
-                                )
-                                if vnode and vnode.name not in season_node.children:
-                                    season_node.children[vnode.name] = vnode
-                            # one episode NFO (shared across qualities)
-                            ep_nfo_name = f"{show_short} S{sn:02d}E{en:02d} - {ep_title}.nfo"
-                            ep_nfo_bytes = episode_nfo(doc, sn, ep).encode("utf-8")
-                            season_node.children[ep_nfo_name] = VNode(
-                                path=f"{season_path}/{ep_nfo_name}",
-                                name=ep_nfo_name,
-                                is_dir=False,
-                                size=len(ep_nfo_bytes),
-                                content_type="text/xml; charset=utf-8",
-                                kind="episode_nfo",
-                                nfo_body=ep_nfo_bytes,
-                                media_type="tv",
-                                tmdb_id=doc.get("tmdb_id"),
-                                db_index=db_index,
-                                season_number=sn,
-                                episode_number=en,
-                            )
-                    show_count += 1
+            self._shows_index = index
+            self._shows_built_at = time.time()
+            LOGGER.info("[WebDAV] Indexed %s TV shows", count)
+            return self._shows_index
+
+    async def _fetch_movie_doc(self, entry: MediaIndexEntry) -> Optional[dict]:
+        storage = db.dbs.get(f"storage_{entry.db_index}")
+        if not storage:
+            return None
+        doc = None
+        try:
+            from bson import ObjectId
+            doc = await storage["movie"].find_one({"_id": ObjectId(entry.doc_id)})
+        except Exception:
+            pass
+        if not doc:
+            try:
+                doc = await storage["movie"].find_one({"_id": entry.doc_id})
+            except Exception:
+                pass
+        if doc:
+            doc = _oid_str(doc)
+            doc.setdefault("db_index", entry.db_index)
+        return doc
+
+    async def _fetch_show_doc(self, entry: MediaIndexEntry) -> Optional[dict]:
+        storage = db.dbs.get(f"storage_{entry.db_index}")
+        if not storage:
+            return None
+        doc = None
+        try:
+            from bson import ObjectId
+            doc = await storage["tv"].find_one({"_id": ObjectId(entry.doc_id)})
+        except Exception:
+            pass
+        if not doc:
+            try:
+                doc = await storage["tv"].find_one({"_id": entry.doc_id})
+            except Exception:
+                pass
+        if doc:
+            doc = _oid_str(doc)
+            doc.setdefault("db_index", entry.db_index)
+        return doc
+
+    async def _get_movie_folder_children(self, entry: MediaIndexEntry) -> Dict[str, VNode]:
+        folder_path = f"/Movies/{entry.folder_name}"
+        if folder_path in self._folder_cache:
+            return self._folder_cache[folder_path]
+
+        doc = await self._fetch_movie_doc(entry)
+        if not doc:
+            return {}
+
+        children: Dict[str, VNode] = {}
+        # NFO
+        nfo_name = f"{entry.folder_name}.nfo"
+        try:
+            nfo_bytes = movie_nfo(doc).encode("utf-8")
+        except Exception as e:
+            LOGGER.warning("[WebDAV] movie_nfo failed for %s: %s", entry.folder_name, e)
+            nfo_bytes = b""
+
+        children[nfo_name.lower()] = VNode(
+            path=f"{folder_path}/{nfo_name}",
+            name=nfo_name,
+            is_dir=False,
+            size=len(nfo_bytes),
+            content_type="text/xml; charset=utf-8",
+            kind="movie_nfo",
+            nfo_body=nfo_bytes,
+            media_type="movie",
+            tmdb_id=doc.get("tmdb_id"),
+            db_index=entry.db_index,
+        )
+
+        # Video qualities
+        qualities = doc.get("telegram") or []
+        for qual in qualities:
+            video_node = self._movie_video_node(folder_path, entry.folder_name, doc, qual)
+            if video_node and video_node.name.lower() not in children:
+                children[video_node.name.lower()] = video_node
+
+        self._cache_folder(folder_path, children)
+        return children
+
+    async def _get_show_folder_children(self, entry: MediaIndexEntry) -> Dict[str, VNode]:
+        folder_path = f"/TV Shows/{entry.folder_name}"
+        if folder_path in self._folder_cache:
+            return self._folder_cache[folder_path]
+
+        doc = await self._fetch_show_doc(entry)
+        if not doc:
+            return {}
+
+        children: Dict[str, VNode] = {}
+        # tvshow.nfo
+        try:
+            nfo_bytes = tvshow_nfo(doc).encode("utf-8")
+        except Exception as e:
+            LOGGER.warning("[WebDAV] tvshow_nfo failed for %s: %s", entry.folder_name, e)
+            nfo_bytes = b""
+
+        children["tvshow.nfo"] = VNode(
+            path=f"{folder_path}/tvshow.nfo",
+            name="tvshow.nfo",
+            is_dir=False,
+            size=len(nfo_bytes),
+            content_type="text/xml; charset=utf-8",
+            kind="show_nfo",
+            nfo_body=nfo_bytes,
+            media_type="tv",
+            tmdb_id=doc.get("tmdb_id"),
+            db_index=entry.db_index,
+        )
+
+        # Seasons
+        for season in doc.get("seasons") or []:
+            sn = int(season.get("season_number") or 0)
+            season_name = f"Season {sn:02d}"
+            season_path = f"{folder_path}/{season_name}"
+            children[season_name.lower()] = VNode(
+                path=season_path,
+                name=season_name,
+                is_dir=True,
+                media_type="tv",
+                tmdb_id=doc.get("tmdb_id"),
+                db_index=entry.db_index,
+                season_number=sn,
+            )
+
+        self._cache_folder(folder_path, children)
+        return children
+
+    async def _get_season_folder_children(self, entry: MediaIndexEntry, sn: int) -> Dict[str, VNode]:
+        season_name = f"Season {sn:02d}"
+        season_path = f"/TV Shows/{entry.folder_name}/{season_name}"
+        if season_path in self._folder_cache:
+            return self._folder_cache[season_path]
+
+        doc = await self._fetch_show_doc(entry)
+        if not doc:
+            return {}
+
+        season_data = next((s for s in (doc.get("seasons") or []) if int(s.get("season_number") or 0) == sn), None)
+        if not season_data:
+            return {}
+
+        children: Dict[str, VNode] = {}
+        # season.nfo
+        try:
+            snfo = season_nfo(doc, sn).encode("utf-8")
+        except Exception as e:
+            LOGGER.warning("[WebDAV] season_nfo failed: %s", e)
+            snfo = b""
+
+        children["season.nfo"] = VNode(
+            path=f"{season_path}/season.nfo",
+            name="season.nfo",
+            is_dir=False,
+            size=len(snfo),
+            content_type="text/xml; charset=utf-8",
+            kind="season_nfo",
+            nfo_body=snfo,
+            media_type="tv",
+            tmdb_id=doc.get("tmdb_id"),
+            db_index=entry.db_index,
+            season_number=sn,
+        )
+
+        show_short = safe_name(doc.get("title_english") or doc.get("title") or "Show", 60)
+        for ep in season_data.get("episodes") or []:
+            en = int(ep.get("episode_number") or 0)
+            ep_title = safe_name(ep.get("title") or f"Episode {en}", 80)
+            qualities = ep.get("telegram") or []
+            for qual in qualities:
+                vnode = self._episode_video_node(
+                    season_path, show_short, sn, en, ep_title, doc, ep, qual
+                )
+                if vnode and vnode.name.lower() not in children:
+                    children[vnode.name.lower()] = vnode
+
+            ep_nfo_name = f"{show_short} S{sn:02d}E{en:02d} - {ep_title}.nfo"
+            try:
+                ep_nfo_bytes = episode_nfo(doc, sn, ep).encode("utf-8")
             except Exception as e:
-                LOGGER.warning("[WebDAV] tv scan failed on %s: %s", db_key, e)
+                ep_nfo_bytes = b""
 
-        LOGGER.info("[WebDAV] Tree ready: %s movies, %s shows", movie_count, show_count)
-        return root
+            children[ep_nfo_name.lower()] = VNode(
+                path=f"{season_path}/{ep_nfo_name}",
+                name=ep_nfo_name,
+                is_dir=False,
+                size=len(ep_nfo_bytes),
+                content_type="text/xml; charset=utf-8",
+                kind="episode_nfo",
+                nfo_body=ep_nfo_bytes,
+                media_type="tv",
+                tmdb_id=doc.get("tmdb_id"),
+                db_index=entry.db_index,
+                season_number=sn,
+                episode_number=en,
+            )
+
+        self._cache_folder(season_path, children)
+        return children
+
+    async def resolve(self, path: str) -> Optional[VNode]:
+        path = normalize_path(path)
+        if path in ("", "/"):
+            return self._root_node
+
+        parts = [p for p in path.strip("/").split("/") if p]
+        cat = parts[0].lower()
+
+        # /Movies...
+        if cat == "movies":
+            if len(parts) == 1:
+                return self._movies_node
+
+            movies_idx = await self._get_movies_index()
+            movie_folder = parts[1].lower()
+            entry = movies_idx.get(movie_folder)
+            if not entry:
+                return None
+
+            if len(parts) == 2:
+                return entry.vnode
+
+            if len(parts) == 3:
+                filename = parts[2].lower()
+                children = await self._get_movie_folder_children(entry)
+                return children.get(filename)
+
+            return None
+
+        # /TV Shows...
+        if cat in ("tv shows", "tvshows", "tv"):
+            if len(parts) == 1:
+                return self._shows_node
+
+            shows_idx = await self._get_shows_index()
+            show_folder = parts[1].lower()
+            entry = shows_idx.get(show_folder)
+            if not entry:
+                return None
+
+            if len(parts) == 2:
+                return entry.vnode
+
+            children = await self._get_show_folder_children(entry)
+            p2 = parts[2].lower()
+
+            if len(parts) == 3:
+                return children.get(p2)
+
+            if len(parts) == 4:
+                m = re.match(r"^season\s*(\d+)$", p2)
+                if not m:
+                    return None
+                sn = int(m.group(1))
+                season_children = await self._get_season_folder_children(entry, sn)
+                filename = parts[3].lower()
+                return season_children.get(filename)
+
+            return None
+
+        return None
+
+    async def list_dir(self, path: str) -> List[VNode]:
+        path = normalize_path(path)
+        if path in ("", "/"):
+            return [self._movies_node, self._shows_node]
+
+        parts = [p for p in path.strip("/").split("/") if p]
+        cat = parts[0].lower()
+
+        if cat == "movies":
+            if len(parts) == 1:
+                movies_idx = await self._get_movies_index()
+                return [e.vnode for e in movies_idx.values() if e.vnode]
+
+            movies_idx = await self._get_movies_index()
+            entry = movies_idx.get(parts[1].lower())
+            if not entry:
+                return []
+            if len(parts) == 2:
+                children = await self._get_movie_folder_children(entry)
+                return list(children.values())
+            return []
+
+        if cat in ("tv shows", "tvshows", "tv"):
+            if len(parts) == 1:
+                shows_idx = await self._get_shows_index()
+                return [e.vnode for e in shows_idx.values() if e.vnode]
+
+            shows_idx = await self._get_shows_index()
+            entry = shows_idx.get(parts[1].lower())
+            if not entry:
+                return []
+
+            if len(parts) == 2:
+                children = await self._get_show_folder_children(entry)
+                return list(children.values())
+
+            if len(parts) == 3:
+                p2 = parts[2].lower()
+                m = re.match(r"^season\s*(\d+)$", p2)
+                if not m:
+                    return []
+                sn = int(m.group(1))
+                season_children = await self._get_season_folder_children(entry, sn)
+                return list(season_children.values())
+
+            return []
+
+        return []
 
     def _movie_video_node(self, folder_path: str, folder: str, doc: dict, qual: dict) -> Optional[VNode]:
         qlabel = safe_name(str(qual.get("quality") or "Unknown"), 20)
@@ -455,9 +748,23 @@ def _oid_str(doc: dict) -> dict:
 
 
 async def _async_sleep(sec: float) -> None:
-    import asyncio
     await asyncio.sleep(sec)
 
 
 # singleton used by routes
-fs = WebDAVFilesystem(cache_ttl=300)
+fs = WebDAVFilesystem(cache_ttl=900)
+
+
+def invalidate_webdav_cache() -> None:
+    """Invalidate WebDAV filesystem cache and re-warm in background if preload is enabled."""
+    fs.invalidate()
+    try:
+        from Backend.helper.settings_manager import SettingsManager
+        if SettingsManager.current().webdav_preload:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(fs.ensure_tree())
+            except RuntimeError:
+                pass
+    except Exception:
+        pass

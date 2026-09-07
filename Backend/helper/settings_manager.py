@@ -33,6 +33,7 @@ _DEFAULTS: Dict[str, Any] = {
     "mediaflow_password": "",
     "webdav_user": "",
     "webdav_password": "",
+    "webdav_preload": False,
     "multi_tokens": [],
     "extra_databases": [],
     "global_search": False,
@@ -210,6 +211,10 @@ class Settings:
     @property
     def webdav_password(self) -> str:
         return str(self._d.get("webdav_password") or "")
+
+    @property
+    def webdav_preload(self) -> bool:
+        return bool(self._d.get("webdav_preload", False))
 
     @property
     def payment_instructions(self) -> str:

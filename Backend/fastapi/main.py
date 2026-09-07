@@ -720,6 +720,20 @@ async def session_remove(_: bool = Depends(require_auth)):
     return await session_remove_api()
 
 
+@app.post("/api/admin/webdav/rebuild")
+async def admin_webdav_rebuild(_: bool = Depends(require_auth)):
+    from Backend.helper.webdav_fs import fs
+    fs.invalidate()
+    movies = await fs._get_movies_index()
+    shows = await fs._get_shows_index()
+    return {
+        "status": "ok",
+        "message": f"WebDAV index built: {len(movies)} movies, {len(shows)} TV shows.",
+        "movies_count": len(movies),
+        "shows_count": len(shows),
+    }
+
+
 #----- System & Maintenance (WebUI replacement for /stats, /log, /restart bot commands)
 @app.get("/api/admin/stats")
 async def admin_db_stats(_: bool = Depends(require_auth)):

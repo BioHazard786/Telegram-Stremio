@@ -97,6 +97,11 @@ async def process_file():
                 imdb_id=metadata_info.get("imdb_id"),
                 media_type=metadata_info.get("media_type"),
             ))
+            try:
+                from Backend.helper.webdav_fs import invalidate_webdav_cache
+                invalidate_webdav_cache()
+            except Exception:
+                pass
         file_queue.task_done()
 
 
@@ -202,6 +207,11 @@ async def _handle_personal_session(client: Client, message: Message) -> None:
             LOGGER.info(
                 f"[Manual Session] Added {quality} {where}to '{metadata_info.get('title')}' (id {tmdb_id}).")
             create_task(stamp_caption_with_id(message, metadata_info))
+            try:
+                from Backend.helper.webdav_fs import invalidate_webdav_cache
+                invalidate_webdav_cache()
+            except Exception:
+                pass
         else:
             LOGGER.warning(
                 f"[Manual Session] Insert failed for message {message.id}.")
@@ -381,6 +391,11 @@ async def file_deleted_handler(client: Client, messages: list[Message]):
                 if await db.remove_media_part(int(channel), msg_id):
                     LOGGER.info(
                         f"Automatically purged deleted message {msg_id} from database.")
+                    try:
+                        from Backend.helper.webdav_fs import invalidate_webdav_cache
+                        invalidate_webdav_cache()
+                    except Exception:
+                        pass
                 if await remove_subtitle(int(channel), msg_id):
                     LOGGER.info(
                         f"Automatically purged deleted subtitle {msg_id} from database.")
